@@ -22,5 +22,6 @@ target
 
 # Project-specific
 /bills/
+/data/
 .claude
 .github

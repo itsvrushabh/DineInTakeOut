@@ -1,13 +1,13 @@
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ratatui::{
-    layout::{Alignment, Constraint, Layout, Rect},
+    layout::{Alignment, Constraint, Flex, Layout, Rect},
     prelude::Stylize,
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table},
     Frame,
 };
 
@@ -15,14 +15,19 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 
 use chrono::Local;
+mod db;
 mod models;
 mod receipts;
 
+use db::Database;
 use models::{
-    BillSummary, CartLine, Focus, MenuItem, Order, OrderStatus, PhysicalTable, Service, TableArea,
-    TableStatus,
+    BillSummary, CartLine, Focus, MenuItem, Order, OrderStatus, PaymentMode, PhysicalTable,
+    Service, TableArea, TableStatus, CLEANING_MINUTES,
 };
 use receipts::{load_recent, money, next_bill_number, render_receipt, save_and_print};
+
+/// Where the embedded Turso (SQLite-compatible) database file lives.
+const DB_PATH: &str = "data/billing.db";
 
 struct App {
     items: Vec<MenuItem>,
@@ -42,6 +47,10 @@ struct App {
     notification_until: Option<chrono::DateTime<Local>>, // dismisses after this time
     recent_bills: Vec<BillSummary>, // newest first, up to five completed bills
     recent_bill_index: usize,
+    focus_return: Focus,        // panel to restore when the prompt closes
+    database: Option<Database>, // None only when the DB could not be opened
+    mobile_buffer: String,      // customer mobile captured in the billing prompt
+    payment_mode_index: usize,  // selection inside the payment-mode popup
 }
 
 /// Default menu — Indian restaurant items with a fixed price chosen from the
@@ -212,33 +221,120 @@ fn init_physical_tables() -> Vec<PhysicalTable> {
 
     for area in areas.iter() {
         for number in 1..=area.table_count() {
-            tables.push(PhysicalTable {
-                number,
-                area: *area,
-                status: TableStatus::Empty,
-                order_id: None,
-            });
+            tables.push(PhysicalTable::ready(*area, number));
         }
     }
     tables
 }
 
+/// Highest TKn suffix across the given orders, so take-out numbering survives
+/// restarts.
+fn max_takeout_number(orders: &[Order]) -> u32 {
+    orders
+        .iter()
+        .filter_map(|order| order.label.strip_prefix("TK"))
+        .filter_map(|suffix| suffix.parse::<u32>().ok())
+        .max()
+        .unwrap_or(0)
+}
+
 impl App {
     fn new() -> Self {
         let data_file = PathBuf::from("menu.csv");
-        let items = match load_menu(&data_file) {
-            Ok(items) if !items.is_empty() => items,
-            _ => default_menu(),
+
+        // Open the embedded Turso database. A failure is not fatal: the app
+        // keeps running from CSV/defaults.
+        let database = match Database::open(Path::new(DB_PATH)) {
+            Ok(db) => Some(db),
+            Err(error) => {
+                eprintln!("Database unavailable ({error}); running without persistence.");
+                None
+            }
         };
+
+        // Menu precedence: database catalogue → menu.csv → built-in defaults.
+        // Whatever we fall back to is seeded into the DB so it becomes the
+        // single source of truth for the next launch.
+        let mut db_notice = String::new();
+        let items = match &database {
+            Some(db) if !db.menu_is_empty() => db.load_menu(),
+            _ => match load_menu(&data_file) {
+                Ok(items) if !items.is_empty() => {
+                    if let Some(db) = &database {
+                        if let Err(error) = db.replace_menu(&items) {
+                            db_notice = format!("Menu seed failed: {error}");
+                        }
+                    }
+                    items
+                }
+                _ => {
+                    let items = default_menu();
+                    if let Some(db) = &database {
+                        if let Err(error) = db.replace_menu(&items) {
+                            db_notice = format!("Menu seed failed: {error}");
+                        }
+                    }
+                    items
+                }
+            },
+        };
+
+        // Restore unpaid orders and physical table states from the last run.
+        let now = Local::now();
+        let (orders, next_order_id, physical_tables) = match &database {
+            Some(db) => {
+                let orders = db.load_open_orders();
+                let stored_tables = db.load_tables(now);
+                let mut tables = init_physical_tables();
+                for table in &mut tables {
+                    if let Some(stored) = stored_tables
+                        .iter()
+                        .find(|s| s.area == table.area && s.number == table.number)
+                    {
+                        table.status = stored.status;
+                        table.order_id = stored.order_id;
+                        table.dirty_since = stored.dirty_since;
+                    }
+                }
+                // Reconcile: a table marked Ready that still has an open order
+                // follows the order's stage instead (crash-consistency fix).
+                for order in &orders {
+                    if let (Some(area), Some(number)) = (order.area, order.table_number) {
+                        if let Some(table) = tables
+                            .iter_mut()
+                            .find(|t| t.area == area && t.number == number)
+                        {
+                            if table.status == TableStatus::Ready || table.order_id.is_none() {
+                                table.status = order.status.table_status();
+                                table.order_id = Some(order.id);
+                                let _ = db.upsert_table(table);
+                            }
+                        }
+                    }
+                }
+                let bill_number = db.next_bill_number();
+                (orders, bill_number, tables)
+            }
+            None => {
+                let recent_bills = load_recent();
+                (
+                    Vec::new(),
+                    next_bill_number(&recent_bills),
+                    init_physical_tables(),
+                )
+            }
+        };
+
         let recent_bills = load_recent();
-        let next_order_id = next_bill_number(&recent_bills);
+        let next_takeout_id = max_takeout_number(&orders).saturating_add(1);
+
         Self {
             items,
-            orders: Vec::new(),
+            orders,
             active_order: 0,
             next_order_id,
-            next_takeout_id: 1,
-            physical_tables: init_physical_tables(),
+            next_takeout_id,
+            physical_tables,
             menu_index: 0,
             search: String::new(),
             focus: Focus::Menu,
@@ -246,11 +342,88 @@ impl App {
             matcher: SkimMatcherV2::default().ignore_case(),
             selected_table_area: TableArea::FrontGarden,
             selected_table_index: 0,
-            notification: String::from("Loaded menu."),
+            notification: {
+                let storage = if database.is_some() {
+                    "data/billing.db"
+                } else {
+                    "no DB"
+                };
+                if db_notice.is_empty() {
+                    format!("Loaded menu. Storage: {storage}.")
+                } else {
+                    db_notice
+                }
+            },
             notification_until: Some(Local::now() + chrono::Duration::minutes(10)),
             recent_bills,
             recent_bill_index: 0,
+            focus_return: Focus::Cart,
+            database,
+            mobile_buffer: String::new(),
+            payment_mode_index: 0,
         }
+    }
+
+    // -- persistence helpers ---------------------------------------------------
+
+    fn persist_table(&self, area: TableArea, number: usize) {
+        if let Some(db) = &self.database {
+            if let Some(table) = self
+                .physical_tables
+                .iter()
+                .find(|t| t.area == area && t.number == number)
+            {
+                if let Err(error) = db.upsert_table(table) {
+                    eprintln!("Table persist failed: {error}");
+                }
+            }
+        }
+    }
+
+    fn persist_active_order(&self) {
+        if let Some(db) = &self.database {
+            if let Some(order) = self.orders.get(self.active_order) {
+                if let Err(error) = db.save_open_order(order) {
+                    eprintln!("Order persist failed: {error}");
+                }
+            }
+        }
+    }
+
+    /// Auto-clean sweep: dirty tables become Ready once the cleaning window
+    /// has elapsed. Returns how many tables were cleaned.
+    fn tick_cleaning(&mut self) -> usize {
+        let deadline = chrono::Duration::minutes(CLEANING_MINUTES);
+        let now = Local::now();
+        let mut cleaned = 0;
+        for table in &mut self.physical_tables {
+            if table.status == TableStatus::Dirty {
+                if let Some(since) = table.dirty_since {
+                    if now - since >= deadline {
+                        table.status = TableStatus::Ready;
+                        table.dirty_since = None;
+                        table.order_id = None;
+                        cleaned += 1;
+                    }
+                } else {
+                    // Defensive: a Dirty row without a timestamp cleans at once.
+                    table.status = TableStatus::Ready;
+                    table.order_id = None;
+                    cleaned += 1;
+                }
+            }
+        }
+        if cleaned > 0 && self.database.is_some() {
+            let snapshot: Vec<PhysicalTable> = self.physical_tables.clone();
+            if let Some(db) = &self.database {
+                for table in snapshot {
+                    if table.status == TableStatus::Ready {
+                        let _ = db.upsert_table(&table);
+                    }
+                }
+            }
+        }
+        cleaned
     }
 
     // -- order (table) management --------------------------------------------
@@ -263,7 +436,39 @@ impl App {
         &mut self.orders[self.active_order]
     }
 
-    /// Opens order for the selected physical table (dine-in only).
+    /// Marks the currently selected table as cleaned (back to Ready) when it
+    /// is in the Cleaning state.
+    fn clean_selected_table(&mut self) {
+        let target = self
+            .physical_tables
+            .iter()
+            .find(|t| {
+                t.area == self.selected_table_area && t.number == self.selected_table_index + 1
+            })
+            .map(|t| (t.area, t.number, t.status));
+
+        if let Some((area, table_num, status)) = target {
+            if status != TableStatus::Dirty {
+                self.notify(String::from("Selected table is not being cleaned."));
+                return;
+            }
+            if let Some(pt) = self
+                .physical_tables
+                .iter_mut()
+                .find(|t| t.area == area && t.number == table_num)
+            {
+                pt.status = TableStatus::Ready;
+                pt.dirty_since = None;
+                pt.order_id = None;
+            }
+            self.persist_table(area, table_num);
+            self.notify(format!("Table {table_num} cleaned and ready."));
+        }
+    }
+
+    /// Opens order for the selected physical table (dine-in only). On a dirty
+    /// table Enter marks it cleaned; on an occupied table it switches to that
+    /// table's order.
     fn open_table_order(&mut self) {
         // Get table info without holding reference
         let table_info = self
@@ -272,16 +477,17 @@ impl App {
             .find(|t| {
                 t.area == self.selected_table_area && t.number == self.selected_table_index + 1
             })
-            .map(|t| (t.area, t.number, t.status));
+            .map(|t| (t.area, t.number, t.status, t.order_id));
 
-        if let Some((area, table_num, status)) = table_info {
-            if status != TableStatus::Empty {
-                if let Some(order_id) = self
-                    .physical_tables
-                    .iter()
-                    .find(|t| t.area == area && t.number == table_num)
-                    .and_then(|t| t.order_id)
-                {
+        if let Some((area, table_num, status, order_id)) = table_info {
+            if status == TableStatus::Dirty {
+                // Staff finished cleaning early — return the table to Ready.
+                self.clean_selected_table();
+                return;
+            }
+
+            if status != TableStatus::Ready {
+                if let Some(order_id) = order_id {
                     if let Some(order_index) = self.orders.iter().position(|o| o.id == order_id) {
                         self.active_order = order_index;
                         self.notify(format!("Switched to {}.", self.order().label));
@@ -318,10 +524,12 @@ impl App {
                 .iter_mut()
                 .find(|t| t.area == area && t.number == table_num)
             {
-                pt.status = TableStatus::HasOrder;
+                pt.status = TableStatus::Ordering;
                 pt.order_id = Some(id);
             }
 
+            self.persist_active_order();
+            self.persist_table(area, table_num);
             self.notify(format!("Opened order for Table {}", table_num));
         }
     }
@@ -345,81 +553,127 @@ impl App {
 
         self.orders.push(order);
         self.active_order = self.orders.len() - 1;
+        self.persist_active_order();
         self.notify(format!("Opened take-out order TK{}.", tk_count));
     }
 
-    /// Closes the active order and clears its table.
+    /// Starts closing the active paid order: first confirm the mode of
+    /// payment, then close (table goes to Cleaning).
     fn close_order(&mut self) {
         if self.orders.is_empty() {
             self.notify(String::from("No orders to close."));
             return;
         }
 
-        let order = self.order();
-        if order.status != OrderStatus::Paid {
-            self.notify(format!(
-                "Generate the bill for {} before closing it.",
-                order.label
-            ));
+        if self.order().status != OrderStatus::Paid {
+            let label = self.order().label.clone();
+            self.notify(format!("Generate the bill for {label} before closing it."));
             return;
         }
+
+        self.payment_mode_index = 0;
+        self.focus_return = self.focus;
+        self.focus = Focus::PaymentMode;
+    }
+
+    /// Confirms the mode of payment and closes the active paid order. Its
+    /// table enters the Cleaning state and becomes Ready again automatically
+    /// after CLEANING_MINUTES.
+    fn perform_close_with_mode(&mut self, mode: PaymentMode) {
+        if self.orders.is_empty() || self.order().status != OrderStatus::Paid {
+            return; // stale prompt; nothing to close
+        }
+
+        let order = self.order();
         let label = order.label.clone();
         let table_info = if let (Some(table_num), Some(area)) = (order.table_number, order.area) {
             Some((table_num, area))
         } else {
             None
         };
+        let closed_id = order.id;
+
+        // Record how this bill was settled.
+        if let Some(db) = &self.database {
+            if let Err(error) = db.update_payment_mode(closed_id, mode.label()) {
+                self.notify(format!("Could not save payment mode: {error}"));
+            }
+        }
+        let mode_display = mode.display();
 
         self.orders.remove(self.active_order);
         if self.active_order >= self.orders.len() && !self.orders.is_empty() {
             self.active_order = self.orders.len() - 1;
         }
+        self.focus = self.focus_return;
 
-        // Clear physical table if applicable
+        // The paid order is already in the history table; drop its open copy.
+        if let Some(db) = &self.database {
+            let _ = db.delete_open_order(closed_id);
+        }
+
+        // Send the table to cleaning (auto-ready after the window elapses).
         if let Some((table_num, area)) = table_info {
             if let Some(pt) = self
                 .physical_tables
                 .iter_mut()
                 .find(|t| t.area == area && t.number == table_num)
             {
-                pt.status = TableStatus::Empty;
+                pt.status = TableStatus::Dirty;
                 pt.order_id = None;
+                pt.dirty_since = Some(Local::now());
             }
+            self.persist_table(area, table_num);
+            self.notify(format!(
+                "Closed {label} via {mode_display}. Table {table_num} cleaning — auto-ready in {CLEANING_MINUTES} min."
+            ));
+            return;
         }
 
-        self.notify(format!("Closed {}.", label));
+        self.notify(format!("Closed {label} via {mode_display}."));
     }
 
-    /// Mark current order as serving (change status from Ordering to Serving).
-    fn start_serving(&mut self) {
+    /// Advances the active order through its lifecycle:
+    /// Ordering → Serving → Ready-for-bill.
+    fn advance_stage(&mut self) {
         if self.orders.is_empty() {
             self.notify(String::from("No active order."));
             return;
         }
 
-        let order_info = {
+        let (current, table_number, area) = {
             let order = self.order();
             (order.status, order.table_number, order.area)
         };
 
-        if let (OrderStatus::Ordering, Some(table_num), Some(area)) = order_info {
-            self.order_mut().status = OrderStatus::Serving;
+        match current.advance() {
+            Some(next) => {
+                self.order_mut().status = next;
+                let label = self.order().label.clone();
 
-            // Update table color to blue (serving)
-            if let Some(pt) = self
-                .physical_tables
-                .iter_mut()
-                .find(|t| t.area == area && t.number == table_num)
-            {
-                pt.status = TableStatus::Serving;
+                if let (Some(table_num), Some(area)) = (table_number, area) {
+                    if let Some(pt) = self
+                        .physical_tables
+                        .iter_mut()
+                        .find(|t| t.area == area && t.number == table_num)
+                    {
+                        pt.status = next.table_status();
+                    }
+                    self.persist_table(area, table_num);
+                }
+                self.persist_active_order();
+                let stage = match next {
+                    OrderStatus::Serving => "now being served",
+                    OrderStatus::BillRequested => "ready for bill",
+                    _ => "advanced",
+                };
+                self.notify(format!("Table {label} — {stage}."));
             }
-
-            let label = self.order().label.clone();
-            self.notify(format!("Order {} is now being served.", label));
-        } else {
-            self.notify(String::from(
-                "Order is already paid or not a dine-in order.",
-            ));
+            None => {
+                self.notify(String::from(
+                    "Order already at final stage (use p to bill, c to close).",
+                ));
+            }
         }
     }
 
@@ -466,6 +720,7 @@ impl App {
                 });
             }
             self.notify(format!("Added {} to {}.", item.name, self.order().label));
+            self.persist_active_order();
         }
     }
 
@@ -481,7 +736,8 @@ impl App {
             if order.cart_index >= order.cart.len() && !order.cart.is_empty() {
                 order.cart_index = order.cart.len() - 1;
             }
-            self.notify(format!("Removed {}.", name));
+            self.notify(format!("Removed {name}."));
+            self.persist_active_order();
         }
     }
 
@@ -492,22 +748,35 @@ impl App {
             return;
         }
 
-        let order = self.order_mut();
-        if order.cart_index >= order.cart.len() {
-            self.notify(String::from("No item selected in the bill."));
-            return;
+        /// What to do after mutating (or falling back to removing) a line.
+        enum Outcome {
+            Message(String),
+            RemoveLine,
         }
 
-        if change > 0 {
-            order.cart[order.cart_index].qty += change as u32;
-            let name = order.cart[order.cart_index].name.clone();
-            self.notify(format!("Increased {name}."));
-        } else if order.cart[order.cart_index].qty > 1 {
-            order.cart[order.cart_index].qty -= (-change) as u32;
-            let name = order.cart[order.cart_index].name.clone();
-            self.notify(format!("Decreased {name}."));
-        } else {
-            self.remove_selected_line();
+        let outcome = {
+            let order = self.order_mut();
+            if order.cart_index >= order.cart.len() {
+                Outcome::Message(String::from("No item selected in the bill."))
+            } else if change > 0 {
+                order.cart[order.cart_index].qty += change as u32;
+                let name = order.cart[order.cart_index].name.clone();
+                Outcome::Message(format!("Increased {name}."))
+            } else if order.cart[order.cart_index].qty > 1 {
+                order.cart[order.cart_index].qty -= (-change) as u32;
+                let name = order.cart[order.cart_index].name.clone();
+                Outcome::Message(format!("Decreased {name}."))
+            } else {
+                Outcome::RemoveLine
+            }
+        };
+
+        match outcome {
+            Outcome::Message(message) => {
+                self.notify(message);
+                self.persist_active_order();
+            }
+            Outcome::RemoveLine => self.remove_selected_line(),
         }
     }
 
@@ -515,9 +784,10 @@ impl App {
         if !self.ensure_editable_order() {
             return;
         }
+        self.order_mut().cart.clear();
         let order = self.order_mut();
-        order.cart.clear();
         order.cart_index = 0;
+        self.persist_active_order();
         self.notify("Cart cleared.");
     }
 
@@ -549,8 +819,9 @@ impl App {
             }
         }
     }
-
-    fn checkout(&mut self) {
+    /// Starts the billing flow: validates the active order, then captures
+    /// the customer's mobile number before generating the bill.
+    fn begin_billing(&mut self) {
         if self.orders.is_empty() {
             self.notify(String::from("No active order."));
             return;
@@ -564,28 +835,90 @@ impl App {
             return;
         }
 
-        let order = self.order();
-        if order.cart.is_empty() {
+        if self.order().cart.is_empty() {
             self.notify(String::from("Cart is empty."));
             return;
         }
 
-        let bill_text = render_receipt(order);
-        match save_and_print(&bill_text, order.id) {
+        self.focus_return = self.focus;
+        self.mobile_buffer.clear();
+        self.focus = Focus::MobileEntry;
+    }
+
+    /// Generates, saves, and prints the bill for the active order. `mobile`
+    /// is the customer's 10-digit number (empty when skipped). The mode of
+    /// payment is confirmed later, when the order is closed.
+    fn complete_billing(&mut self, mobile: &str) {
+        if self.orders.is_empty() || self.order().status == OrderStatus::Paid {
+            return; // stale prompt (e.g. order changed mid-entry); ignore
+        }
+        if self.order().cart.is_empty() {
+            self.notify(String::from("Cart is empty."));
+            return;
+        }
+
+        let customer_mobile = if mobile.trim().is_empty() {
+            None
+        } else {
+            Some(mobile.trim())
+        };
+        let (order_id, order_label, order_service, table_info, totals, bill_text) = {
+            let order = self.order();
+            let table_info = match (order.table_number, order.area) {
+                (Some(table_num), Some(area)) => Some((table_num, area)),
+                _ => None,
+            };
+            (
+                order.id,
+                order.label.clone(),
+                order.service,
+                table_info,
+                order.totals(),
+                render_receipt(order, customer_mobile),
+            )
+        };
+
+        match save_and_print(&bill_text, order_id) {
             Ok(msg) => {
+                // Persist the paid bill (mobile + AC/GST breakdown) and
+                // remove its open-order copy first.
+                let mut db_error: Option<String> = None;
+                if let Some(db) = &self.database {
+                    if let Err(error) = db.save_paid_order(self.order(), mobile.trim(), &totals) {
+                        db_error = Some(error);
+                    }
+                    let _ = db.delete_open_order(order_id);
+                }
+                if let Some(error) = db_error {
+                    self.notify(format!("DB save failed: {error}"));
+                }
                 let summary = BillSummary {
-                    id: order.id,
-                    label: order.label.clone(),
-                    service: order.service,
-                    total: order.cart.iter().map(|line| line.total()).sum::<f64>()
-                        * (1.0 + order.service.tax_rate()),
+                    id: order_id,
+                    label: order_label.clone(),
+                    service: order_service,
+                    total: totals.total,
                     receipt: bill_text.clone(),
                 };
                 self.recent_bills.insert(0, summary);
                 self.recent_bills.truncate(5);
                 self.recent_bill_index = 0;
                 self.notify(msg);
+
                 self.order_mut().status = OrderStatus::Paid;
+
+                // Bill settled: guests may still be seated, so the table shows
+                // Paid until closed (then it goes to cleaning).
+                if let Some((table_num, area)) = table_info {
+                    if let Some(pt) = self
+                        .physical_tables
+                        .iter_mut()
+                        .find(|t| t.area == area && t.number == table_num)
+                    {
+                        pt.status = TableStatus::Paid;
+                    }
+                    self.persist_table(area, table_num);
+                }
+                self.focus = self.focus_return;
             }
             Err(e) => self.notify(format!("Print failed: {e}")),
         }
@@ -594,9 +927,18 @@ impl App {
     // -- key handling ---------------------------------------------------------
 
     fn handle_key(&mut self, key: KeyCode) -> bool {
-        // Global quit.
-        if matches!(key, KeyCode::Char('q') | KeyCode::Esc)
-            && (self.focus != Focus::Search || matches!(key, KeyCode::Esc))
+        // Global quit: q/Esc are captured by the billing prompts while open;
+        // q is ignored while typing in the search box.
+        if matches!(key, KeyCode::Char('q'))
+            && self.focus != Focus::Search
+            && self.focus != Focus::MobileEntry
+            && self.focus != Focus::PaymentMode
+        {
+            return true;
+        }
+        if matches!(key, KeyCode::Esc)
+            && self.focus != Focus::MobileEntry
+            && self.focus != Focus::PaymentMode
         {
             return true;
         }
@@ -652,14 +994,22 @@ impl App {
                     self.focus = Focus::Search;
                 }
                 KeyCode::Char('c') => self.clear_active_cart(),
-                KeyCode::Char('p') => self.checkout(),
+                KeyCode::Char('p') => self.begin_billing(),
                 KeyCode::Char('e') => {
                     let res = export_menu_csv(&self.data_file, &self.items);
                     match res {
-                        Ok(n) => self.notify(format!(
-                            "Exported {n} items to {}.",
-                            self.data_file.display()
-                        )),
+                        Ok(n) => {
+                            if let Some(db) = &self.database {
+                                if let Err(error) = db.replace_menu(&self.items) {
+                                    self.notify(format!("DB menu sync failed: {error}"));
+                                    return false;
+                                }
+                            }
+                            self.notify(format!(
+                                "Exported {n} items to {}.",
+                                self.data_file.display()
+                            ));
+                        }
                         Err(e) => self.notify(format!("Export failed: {e}")),
                     }
                 }
@@ -668,6 +1018,12 @@ impl App {
                     match res {
                         Ok(n) => {
                             self.items = load_menu(&self.data_file).unwrap_or_default();
+                            if let Some(db) = &self.database {
+                                if let Err(error) = db.replace_menu(&self.items) {
+                                    self.notify(format!("DB menu sync failed: {error}"));
+                                    return false;
+                                }
+                            }
                             self.notify(format!(
                                 "Imported {n} items from {}.",
                                 self.data_file.display()
@@ -697,7 +1053,7 @@ impl App {
                 KeyCode::Char('-') => self.adjust_selected_line_quantity(-1),
                 KeyCode::Delete | KeyCode::Char('x') => self.remove_selected_line(),
                 KeyCode::Char('c') => self.clear_active_cart(),
-                KeyCode::Enter | KeyCode::Char('p') => self.checkout(),
+                KeyCode::Enter | KeyCode::Char('p') => self.begin_billing(),
                 KeyCode::Tab => {
                     self.focus = Focus::Tables;
                 }
@@ -750,9 +1106,16 @@ impl App {
                     self.close_order();
                 }
                 KeyCode::Char('s') => {
-                    self.start_serving();
+                    self.advance_stage();
                 }
-                KeyCode::Char('b') | KeyCode::Char('p') => self.checkout(),
+                KeyCode::Char('r') => {
+                    self.clean_selected_table();
+                }
+                KeyCode::Char('u') => {
+                    self.focus_return = self.focus;
+                    self.focus = Focus::AdminMode;
+                }
+                KeyCode::Char('b') | KeyCode::Char('p') => self.begin_billing(),
                 KeyCode::BackTab => self.focus = Focus::Cart,
                 KeyCode::Tab => self.focus = Focus::RecentBills,
                 KeyCode::Char(d @ '1'..='4') => {
@@ -776,6 +1139,66 @@ impl App {
                 KeyCode::BackTab => self.focus = Focus::Tables,
                 _ => {}
             },
+            Focus::MobileEntry => {
+                match key {
+                    KeyCode::Char(c) if c.is_ascii_digit() => {
+                        if self.mobile_buffer.len() < 10 {
+                            self.mobile_buffer.push(c);
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        self.mobile_buffer.pop();
+                    }
+                    KeyCode::Enter => {
+                        if self.mobile_buffer.len() == 10 {
+                            let mobile = std::mem::take(&mut self.mobile_buffer);
+                            self.complete_billing(&mobile);
+                        } else {
+                            self.notify(format!(
+                                "Mobile number needs 10 digits ({} so far).",
+                                self.mobile_buffer.len()
+                            ));
+                        }
+                    }
+                    KeyCode::Esc => {
+                        // Cancel billing; return to the panel that opened it.
+                        self.focus = self.focus_return;
+                    }
+                    _ => {}
+                }
+            }
+            Focus::PaymentMode => match key {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.payment_mode_index = self.payment_mode_index.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let last = PaymentMode::all().len() - 1;
+                    if self.payment_mode_index < last {
+                        self.payment_mode_index += 1;
+                    }
+                }
+                // Quick select: 1–5 picks a mode and closes at once.
+                KeyCode::Char(d @ '1'..='5') => {
+                    if let Some(mode) = PaymentMode::all().get((d as u8 - b'1') as usize) {
+                        self.perform_close_with_mode(*mode);
+                    }
+                }
+                KeyCode::Enter => {
+                    if let Some(mode) = PaymentMode::all().get(self.payment_mode_index) {
+                        self.perform_close_with_mode(*mode);
+                    }
+                }
+                KeyCode::Esc => {
+                    // Cancel closing; return to the panel that opened it.
+                    self.focus = self.focus_return;
+                }
+                _ => {}
+            },
+            Focus::AdminMode => {
+                if key == KeyCode::Esc {
+                    self.focus = self.focus_return;
+                }
+            }
         }
         false
     }
@@ -1014,6 +1437,10 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
     let mut app = App::new();
     loop {
         app.tick_notification();
+        let cleaned = app.tick_cleaning();
+        if cleaned > 0 {
+            app.notify(format!("{cleaned} table(s) cleaned and back to Ready."));
+        }
         terminal.draw(|f| ui(f, &app))?;
 
         // Poll so the 10-minute banner can expire even without keypresses.
@@ -1067,6 +1494,150 @@ fn ui(f: &mut Frame, app: &App) {
         render_recent_bills(f, app, recent_bills_area);
     }
     render_footer(f, app, footer_area);
+    if app.focus == Focus::MobileEntry {
+        render_mobile_entry(f, app);
+    }
+    if app.focus == Focus::PaymentMode {
+        render_payment_mode(f, app);
+    }
+}
+
+/// A fixed-size rectangle centred inside `outer`.
+fn centered_rect(width: u16, height: u16, outer: Rect) -> Rect {
+    let vertical = Layout::vertical([Constraint::Length(height)])
+        .flex(Flex::Center)
+        .split(outer);
+    Layout::horizontal([Constraint::Length(width)])
+        .flex(Flex::Center)
+        .split(vertical[0])[0]
+}
+
+/// Modal prompt that captures the customer's 10-digit mobile number during
+/// billing.
+fn render_mobile_entry(f: &mut Frame, app: &App) {
+    let area = centered_rect(46, 7, f.area());
+    f.render_widget(Clear, area);
+
+    let complete = app.mobile_buffer.len() == 10;
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(
+            " Customer mobile ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .border_style(if complete {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default().fg(Color::Cyan)
+        });
+
+    // Group the digits 5 + 5 for readability; pad with underscores.
+    let mut padded: String = app.mobile_buffer.clone();
+    for _ in app.mobile_buffer.len()..10 {
+        padded.push('_');
+    }
+    let display = format!("{} {}", &padded[..5], &padded[5..]);
+
+    let lines = vec![
+        Line::styled(
+            "Enter the customer's mobile number",
+            Style::default().fg(Color::DarkGray),
+        ),
+        Line::from(Span::styled(
+            format!("   {display}|   "),
+            Style::default()
+                .fg(if complete {
+                    Color::Green
+                } else {
+                    Color::Yellow
+                })
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::styled(
+            "Enter: generate bill · Backspace: edit · Esc: cancel",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ];
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let rows: Vec<Rect> = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .flex(Flex::Center)
+    .split(inner)
+    .to_vec();
+    for (line, rect) in lines.into_iter().zip(rows) {
+        f.render_widget(Paragraph::new(line).alignment(Alignment::Center), rect);
+    }
+}
+
+/// Modal confirmation of the mode of payment, shown when a paid order is
+/// about to be closed.
+fn render_payment_mode(f: &mut Frame, app: &App) {
+    let modes = PaymentMode::all();
+    let area = centered_rect(46, (modes.len() as u16) + 7, f.area());
+    f.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(
+            " Mode of payment ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let header = match app.orders.get(app.active_order) {
+        Some(order) => format!(
+            "Close {} · Bill #{} — {}",
+            order.label,
+            order.id,
+            money(order.totals().total)
+        ),
+        None => String::from("No order selected"),
+    };
+    let mut lines = vec![Line::styled(
+        header,
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )];
+    for (idx, mode) in modes.iter().enumerate() {
+        let selected = idx == app.payment_mode_index;
+        let marker = if selected { "▸ " } else { "  " };
+        let line_text = format!("{marker}{}. {:<16}", idx + 1, mode.display());
+        lines.push(Line::from(Span::styled(
+            line_text,
+            if selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            },
+        )));
+    }
+    lines.push(Line::styled(
+        "↑↓/1–5: select · Enter: confirm & close · Esc: cancel",
+        Style::default().fg(Color::DarkGray),
+    ));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let rows: Vec<Rect> = Layout::vertical(vec![Constraint::Length(1); lines.len()])
+        .flex(Flex::Center)
+        .split(inner)
+        .to_vec();
+    for (line, rect) in lines.into_iter().zip(rows) {
+        f.render_widget(Paragraph::new(line), rect);
+    }
 }
 
 fn render_notification(f: &mut Frame, app: &App, area: Rect) {
@@ -1137,6 +1708,16 @@ fn render_recent_bills(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+/// One-line legend entry for a lifecycle stage.
+fn legend_span(glyph: char, label: &str, color: Color) -> Span<'static> {
+    Span::styled(
+        format!("{glyph} {label}  "),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    )
+}
+
+/// Renders the floor plan: one bar per area with colour-coded status cards
+/// (`R1` = table 1 Ready), plus take-out chips and a lifecycle legend.
 fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
     let active = app.focus == Focus::Tables;
     let border_style = if active {
@@ -1156,7 +1737,7 @@ fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(Span::styled(
-            " Tables — ↑/↓: area · ←/→: table · 1–4: jump · Enter: open · t: takeout · s: serve · c: close ",
+            " Floor plan — ↑↓: area · ←→: table · 1–4: jump · Enter: open/switch/clean · s: next stage ",
             title_style,
         ))
         .border_style(border_style);
@@ -1171,60 +1752,90 @@ fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
         Constraint::Length(1), // Main Hall
         Constraint::Length(1), // Back Garden
         Constraint::Length(1), // TakeOut
+        Constraint::Length(1), // Legend
     ])
     .split(inner)
     .to_vec();
 
     let areas = TableArea::all();
+    let now = Local::now();
 
     // One horizontal bar per physical area.
     for (bar_i, area_type) in areas.iter().enumerate() {
         let is_focused_bar = active && app.selected_table_area == *area_type;
 
-        let label_style = if is_focused_bar {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+        // Free-seating summary for the area label.
+        let free = app
+            .physical_tables
+            .iter()
+            .filter(|t| t.area == *area_type && t.status == TableStatus::Ready)
+            .count();
+        let total = area_type.table_count();
+
+        let (label_fg, label_mod) = if is_focused_bar {
+            (Color::Yellow, Modifier::BOLD | Modifier::REVERSED)
         } else {
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD)
+            (Color::DarkGray, Modifier::BOLD)
         };
+        let mut spans = vec![
+            Span::styled(
+                format!(" {:<12}", area_type.label()),
+                Style::default().fg(label_fg).add_modifier(label_mod),
+            ),
+            Span::styled(
+                format!("{free}/{total} "),
+                Style::default().fg(if free > 0 { Color::Green } else { Color::Red }),
+            ),
+        ];
 
-        let mut spans = vec![Span::styled(
-            format!(" {:<12}", area_type.label()),
-            label_style,
-        )];
-
-        for table_num in 1..=area_type.table_count() {
-            let status = app
+        for table_num in 1..=total {
+            let table = app
                 .physical_tables
                 .iter()
-                .find(|t| t.area == *area_type && t.number == table_num)
-                .map(|t| t.status);
+                .find(|t| t.area == *area_type && t.number == table_num);
 
-            let (color, symbol) = match status {
-                Some(TableStatus::Empty) | None => (Color::Green, "Ready:"),
-                Some(TableStatus::HasOrder) => (Color::Red, "HasOrder:"),
-                Some(TableStatus::Serving) => (Color::Blue, "Serving:"),
+            let status = table.map_or(TableStatus::Ready, |t| t.status);
+            let glyph = match status {
+                TableStatus::Ready => 'R',
+                TableStatus::Ordering => 'O',
+                TableStatus::Serving => 'S',
+                TableStatus::BillRequested => 'B',
+                TableStatus::Paid => 'P',
+                TableStatus::Dirty => 'C',
+            };
+            let status_color = status.color();
+
+            // Dirty tables count down to auto-ready.
+            let countdown = if status == TableStatus::Dirty {
+                table.and_then(|t| t.dirty_since).map(|since| {
+                    let elapsed = now - since;
+                    let remaining = chrono::Duration::minutes(CLEANING_MINUTES) - elapsed;
+                    let mins = remaining.num_minutes().max(0);
+                    format!(" {mins}m")
+                })
+            } else {
+                None
             };
 
             let is_selected = is_focused_bar && app.selected_table_index == table_num - 1;
 
-            let bg = if is_selected {
-                Color::White
-            } else {
-                Color::Reset
+            let cell_text = match &countdown {
+                Some(mins) => format!("{glyph}{table_num}{mins}"),
+                None => format!("{glyph}{table_num}"),
             };
-            let fg = if is_selected { Color::Black } else { color };
-
+            spans.push(Span::raw(" "));
             spans.push(Span::styled(
-                format!(" {}{} ", symbol, table_num),
-                Style::default().fg(fg).bg(bg).add_modifier(if is_selected {
-                    Modifier::BOLD
+                format!("[{cell_text}]"),
+                if is_selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::White)
+                        .add_modifier(Modifier::BOLD)
                 } else {
-                    Modifier::empty()
-                }),
+                    Style::default()
+                        .fg(status_color)
+                        .add_modifier(Modifier::BOLD)
+                },
             ));
         }
 
@@ -1261,15 +1872,32 @@ fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
         } else {
             Style::default().fg(Color::Magenta)
         };
-        tk_spans.push(Span::styled(format!(" [{}] ", order.label), style));
+        let label = order.label.clone();
+        tk_spans.push(Span::styled(format!(" [{label}] "), style));
     }
     if !has_takeout {
         tk_spans.push(Span::styled(
-            " (none)",
+            " (none — press t)",
             Style::default().fg(Color::DarkGray),
         ));
     }
     f.render_widget(Line::from(tk_spans), rows[4]);
+
+    // Lifecycle legend.
+    let legend = Line::from(vec![
+        Span::raw(" "),
+        legend_span('R', "Ready", TableStatus::Ready.color()),
+        legend_span('O', "Ordering", TableStatus::Ordering.color()),
+        legend_span('S', "Serving", TableStatus::Serving.color()),
+        legend_span('B', "For bill", TableStatus::BillRequested.color()),
+        legend_span('P', "Paid", TableStatus::Paid.color()),
+        legend_span(
+            'C',
+            &format!("Cleaning ({CLEANING_MINUTES}m)"),
+            TableStatus::Dirty.color(),
+        ),
+    ]);
+    f.render_widget(legend, rows[5]);
 }
 
 fn render_search(f: &mut Frame, app: &App, area: Rect) {
@@ -1386,9 +2014,17 @@ fn render_bill(f: &mut Frame, app: &App, area: Rect) {
     let order = app.order();
     let paid = matches!(order.status, OrderStatus::Paid);
     let serving = matches!(order.status, OrderStatus::Serving);
+    let bill_ready = matches!(order.status, OrderStatus::BillRequested);
     let title = if paid {
         format!(
             " Bill #{} — PAID ✔ ({} / {}) ",
+            order.id,
+            order.label,
+            order.service.label()
+        )
+    } else if bill_ready {
+        format!(
+            " Bill #{} — READY FOR BILL ⏳ ({} / {}) ",
             order.id,
             order.label,
             order.service.label()
@@ -1462,33 +2098,41 @@ fn render_bill(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(table, area);
 
     // Totals pinned to the bottom, inside the same block borders.
-    const TOTALS_LINES: u16 = 3;
-    let subtotal: f64 = order.cart.iter().map(|l| l.total()).sum();
-    let tax = subtotal * order.service.tax_rate();
-    let lines = vec![
-        Line::from(Span::raw(format!(
-            " {:<16}{:>12}",
-            "Subtotal",
-            money(subtotal)
-        ))),
-        Line::from(Span::raw(format!(
-            " {:<16}{:>12}",
-            format!("Tax ({:.0}%)", order.service.tax_rate() * 100.0),
-            money(tax)
-        ))),
-        Line::from(Span::styled(
-            format!(" {:<16}{:>12}", "TOTAL", money(subtotal + tax)),
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-    ];
-    let totals = Paragraph::new(lines);
+    let totals = order.totals();
+    let mut total_lines = vec![Line::from(Span::raw(format!(
+        " {:<16}{:>12}",
+        "Subtotal",
+        money(totals.subtotal)
+    )))];
+    if totals.ac_charge > 0.0 {
+        total_lines.push(Line::from(Span::styled(
+            format!(
+                " {:<16}{:>12}",
+                format!("AC charge ({:.0}%)", order.ac_surcharge() * 100.0),
+                money(totals.ac_charge)
+            ),
+            Style::default().fg(Color::Cyan),
+        )));
+    }
+    total_lines.push(Line::from(Span::raw(format!(
+        " {:<16}{:>12}",
+        format!("GST ({:.0}%)", totals.gst_rate * 100.0),
+        money(totals.gst)
+    ))));
+    total_lines.push(Line::from(Span::styled(
+        format!(" {:<16}{:>12}", "TOTAL", money(totals.total)),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+
+    const TOTALS_LINES: u16 = 4;
+    let totals_para = Paragraph::new(total_lines);
     let bottom = Rect {
         x: area.x + 1,
         y: area.bottom().saturating_sub(TOTALS_LINES + 1),
         width: area.width.saturating_sub(2),
         height: TOTALS_LINES,
     };
-    f.render_widget(totals, bottom);
+    f.render_widget(totals_para, bottom);
 }
 
 fn render_footer(f: &mut Frame, _app: &App, area: Rect) {
@@ -1496,10 +2140,14 @@ fn render_footer(f: &mut Frame, _app: &App, area: Rect) {
         vec![Line::from(" Tab: focus · /: search · p: bill · q: quit ")]
     } else {
         vec![
-            Line::from(" Tab/Shift+Tab: focus · ↑↓/j/k: select · /: search "),
-            Line::from(" ←→/h/l: table · Enter: open, switch, add, or pay "),
-            Line::from(" Bill: +/- qty · x: remove line · c: clear all · p/Enter: checkout "),
-            Line::from(" s: serve · c: close paid order · e/i: menu export/import · q/Esc: quit "),
+            Line::from(" Tab/Shift+Tab: focus · ↑↓/j/k: select · /: search · [:] switch order "),
+            Line::from(
+                " Floor plan: Enter open/switch/clean · s next stage · t takeout · c close paid ",
+            ),
+            Line::from(
+                " Bill: +/- qty · x remove line · c clear · p bill (mobile + payment mode) ",
+            ),
+            Line::from(" e/i menu export/import (DB synced) · q/Esc quit "),
         ]
     };
     f.render_widget(Paragraph::new(help).style(Style::default().dim()), area);
