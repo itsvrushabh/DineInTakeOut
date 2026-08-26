@@ -16,7 +16,7 @@ pub fn money(value: f64) -> String {
     format!("₹{value:.2}")
 }
 
-pub fn render_receipt(order: &Order) -> String {
+pub fn render_receipt(order: &Order, customer_mobile: Option<&str>) -> String {
     let mut out = String::new();
     out.push_str(&center("SHREE KRISHNA RESTAURANT", 42));
     out.push('\n');
@@ -27,6 +27,9 @@ pub fn render_receipt(order: &Order) -> String {
     out.push_str(&format!("Bill #{:<6} Table: {}\n", order.id, order.label));
     out.push_str(&format!("{}\n", Local::now().format("%d-%m-%Y %H:%M")));
     out.push_str(&format!("Mode : {}\n", order.service.label()));
+    if let Some(mobile) = customer_mobile {
+        out.push_str(&format!("Mobile: {mobile}\n"));
+    }
     out.push_str(&"-".repeat(42));
     out.push('\n');
 
@@ -41,17 +44,27 @@ pub fn render_receipt(order: &Order) -> String {
         ));
     }
 
-    let subtotal: f64 = order.cart.iter().map(|line| line.total()).sum();
-    let tax = subtotal * order.service.tax_rate();
+    let totals = order.totals();
     out.push_str(&"-".repeat(42));
     out.push('\n');
-    out.push_str(&format!("{:<22}{:>20}\n", "Subtotal", money(subtotal)));
     out.push_str(&format!(
         "{:<22}{:>20}\n",
-        format!("GST ({:.0}%)", order.service.tax_rate() * 100.0),
-        money(tax)
+        "Subtotal",
+        money(totals.subtotal)
     ));
-    out.push_str(&format!("{:<22}{:>20}\n", "TOTAL", money(subtotal + tax)));
+    if totals.ac_charge > 0.0 {
+        out.push_str(&format!(
+            "{:<22}{:>20}\n",
+            format!("AC charge ({:.0}%)", order.ac_surcharge() * 100.0),
+            money(totals.ac_charge)
+        ));
+    }
+    out.push_str(&format!(
+        "{:<22}{:>20}\n",
+        format!("GST ({:.0}%)", totals.gst_rate * 100.0),
+        money(totals.gst)
+    ));
+    out.push_str(&format!("{:<22}{:>20}\n", "TOTAL", money(totals.total)));
     out.push_str(&"-".repeat(42));
     out.push('\n');
     out.push_str(&center("Thank you! Visit again!", 42));
