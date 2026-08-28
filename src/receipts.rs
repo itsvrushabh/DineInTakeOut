@@ -16,12 +16,16 @@ pub fn money(value: f64) -> String {
     format!("₹{value:.2}")
 }
 
-pub fn render_receipt(order: &Order, customer_mobile: Option<&str>) -> String {
+pub fn render_receipt(order: &Order, customer_mobile: Option<&str>, gst_number: &str) -> String {
     let mut out = String::new();
     out.push_str(&center("SHREE KRISHNA RESTAURANT", 42));
     out.push('\n');
     out.push_str(&center("Dine-In & Take-Out", 42));
     out.push('\n');
+    if !gst_number.trim().is_empty() {
+        out.push_str(&center(&format!("GSTIN: {gst_number}"), 42));
+        out.push('\n');
+    }
     out.push_str(&"-".repeat(42));
     out.push('\n');
     out.push_str(&format!("Bill #{:<6} Table: {}\n", order.id, order.label));
@@ -52,6 +56,13 @@ pub fn render_receipt(order: &Order, customer_mobile: Option<&str>) -> String {
         "Subtotal",
         money(totals.subtotal)
     ));
+    if totals.discount > 0.0 {
+        out.push_str(&format!(
+            "{:<22}{:>20}\n",
+            format!("Discount ({:.0}%)", order.discount_percent),
+            money(-totals.discount)
+        ));
+    }
     if totals.ac_charge > 0.0 {
         out.push_str(&format!(
             "{:<22}{:>20}\n",

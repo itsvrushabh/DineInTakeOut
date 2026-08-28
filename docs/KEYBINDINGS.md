@@ -6,7 +6,7 @@
 | `↑` / `↓` or `j` / `k` | Select a menu item, cart item, area, or saved bill |
 | `←` / `→` or `h` / `l` | Select a table in the active area |
 | `[` / `]` | Cycle left / right through all open orders (dine-in and take-out) |
-| `1`–`4` | Jump to a table area |
+| `1`–`9` | Jump to a table area |
 | `/` | Focus menu search |
 | `Enter` | Add menu item; open or switch table order; pay from cart |
 | `=` / `+` | Increase selected cart-item quantity |
@@ -17,8 +17,8 @@
 | `s` | Advance the active order: Taking order → Serving → Ready for bill |
 | `c` | Clear an unpaid cart in Menu, or close a paid order in Tables (asks the mode of payment first) |
 | `r` | Mark the selected cleaning table as ready |
-| `e` / `i` | Export / import `menu.csv` while in Menu (the database is kept in sync) |
-| `q` / `Esc` | Quit (`Esc` also exits search) |
+| `e` / `i` | Export / import the **full config** (menu, areas, offers, GSTIN, AC rate) as CSV while in Menu |
+| `q` / `Esc` | Quit (`Esc` also exits search and the billing popups) |
 
 ## Table lifecycle
 
@@ -33,13 +33,31 @@ Ready → Taking order → Serving → Ready for bill → Bill paid
 - `s` advances the stage; the floor-plan card updates instantly.
 - `p` opens the billing prompt — type the customer's 10-digit mobile number
   (digits only, `Backspace` to fix, `Esc` to cancel). `Enter` generates the
-  bill; the table shows **Bill paid** while the guests finish up.
+  bill; if any discount **offers** exist, a popup first asks which offer (or
+  none) to apply, then the table shows **Bill paid** while the guests finish up.
 - `c` closes the paid order: first a popup asks the **mode of payment**
   (Cash / UPI / Card / Person credit / Have it on hotel), then the table
   enters **Cleaning** and turns Ready by itself after ~10 minutes, or
   immediately with `r`.
 - The legend row in the floor plan maps every colour to its stage. Each area
-  label shows how many of its tables are free.
+   label shows how many of its tables are free. Areas are fully configurable via
+   CSV (see below) — add, remove, rename, set table counts, and mark which are
+   air-conditioned.
+
+## Configuration (CSV import / export)
+
+Configuration is managed with CSV files rather than an in-app editor. From the
+**Menu** panel:
+
+- `e` exports the full config bundle next to `menu.csv`: `menu.csv`, `areas.csv`,
+  `offers.csv`, and `config.csv`.
+- `i` imports those four files, validates them, persists everything to the
+  database, and rebuilds the in-memory table map.
+
+The files are plain, spreadsheet-friendly CSV — see `docs/CONFIGURATION.md` for
+the exact columns. Offers appear at billing time so staff can apply them to a
+bill; AC areas add the surcharge and 5% GST; the GSTIN is printed on every
+receipt.
 
 All table states, unpaid orders, and paid bills are stored in the database, so
 an application restart resumes the shift exactly where it left off.

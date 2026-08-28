@@ -130,11 +130,11 @@ pub enum Focus {
     MobileEntry,
     /// Modal confirmation of the mode of payment during billing.
     PaymentMode,
-    AdminMode,
+    /// Modal selection of a discount offer to apply at billing.
+    OfferSelect,
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
-#[allow(dead_code)]
 pub enum OrderStatus {
     Ordering,
     Serving,
@@ -183,67 +183,42 @@ impl OrderStatus {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-#[allow(dead_code)]
-pub enum TableArea {
-    FrontGarden,
-    ACRooms,
-    MainHall,
-    BackGarden,
+/// A configurable dining area (e.g. First Floor, Ground Floor, Serve in Cars).
+/// Areas are user-defined via the admin panel, each with its own table count
+/// and an `is_ac` flag that triggers the (global) AC surcharge and 5% GST.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Area {
+    pub name: String,
+    pub is_ac: bool,
+    pub table_count: usize,
 }
 
-impl TableArea {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::FrontGarden => "Front Garden",
-            Self::ACRooms => "AC Rooms",
-            Self::MainHall => "Main Hall",
-            Self::BackGarden => "Back Garden",
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn parse(raw: &str) -> Option<Self> {
-        TableArea::all()
-            .into_iter()
-            .find(|area| area.label() == raw)
-    }
-
-    pub fn table_count(self) -> usize {
-        match self {
-            Self::FrontGarden => 5,
-            Self::ACRooms => 4,
-            Self::MainHall => 6,
-            Self::BackGarden => 8,
-        }
-    }
-
-    /// Extra charge (as a fraction of the subtotal) for air-conditioned
-    /// seating.
-    pub fn ac_surcharge(self) -> f64 {
-        match self {
-            Self::ACRooms => 0.06,
-            _ => 0.0,
-        }
-    }
-
-    pub fn all() -> [Self; 4] {
-        [
-            Self::FrontGarden,
-            Self::ACRooms,
-            Self::MainHall,
-            Self::BackGarden,
+impl Area {
+    /// Seed layout: preserves the names the pre-dynamic database used so that
+    /// existing stored orders still resolve to a known area.
+    pub fn defaults() -> Vec<Area> {
+        vec![
+            Area {
+                name: "Front Garden".to_string(),
+                is_ac: false,
+                table_count: 5,
+            },
+            Area {
+                name: "AC Rooms".to_string(),
+                is_ac: true,
+                table_count: 4,
+            },
+            Area {
+                name: "Main Hall".to_string(),
+                is_ac: false,
+                table_count: 6,
+            },
+            Area {
+                name: "Back Garden".to_string(),
+                is_ac: false,
+                table_count: 8,
+            },
         ]
-    }
-
-    pub fn from_digit(digit: char) -> Option<Self> {
-        match digit {
-            '1' => Some(Self::FrontGarden),
-            '2' => Some(Self::ACRooms),
-            '3' => Some(Self::MainHall),
-            '4' => Some(Self::BackGarden),
-            _ => None,
-        }
     }
 }
 
@@ -308,10 +283,10 @@ impl TableStatus {
 }
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct PhysicalTable {
     pub number: usize,
-    pub area: TableArea,
+    pub area: String,
     pub status: TableStatus,
     pub order_id: Option<u32>,
     /// When the bill was closed and cleaning started; drives auto-ready.
@@ -320,10 +295,10 @@ pub struct PhysicalTable {
 
 #[allow(dead_code)]
 impl PhysicalTable {
-    pub fn ready(area: TableArea, number: usize) -> Self {
+    pub fn ready(area: &str, number: usize) -> Self {
         Self {
             number,
-            area,
+            area: area.to_string(),
             status: TableStatus::Ready,
             order_id: None,
             dirty_since: None,
@@ -331,11 +306,20 @@ impl PhysicalTable {
     }
 }
 
+/// A discount offer applied at billing time.
+#[derive(Clone, Debug)]
+pub struct Offer {
+    pub id: u32,
+    pub name: String,
+    pub discount_percent: f64,
+}
+
 /// Full price breakdown for an order. AC-room seating adds a surcharge that
 /// is taxed together with the food (GST applies on subtotal + surcharge).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BillTotals {
     pub subtotal: f64,
+    pub discount: f64,
     pub ac_charge: f64,
     pub gst_rate: f64,
     pub gst: f64,
@@ -348,7 +332,14 @@ pub struct Order {
     pub label: String,
     pub service: Service,
     pub table_number: Option<usize>,
-    pub area: Option<TableArea>,
+    /// Area name for dine-in orders; `None` for take-out.
+    pub area: Option<String>,
+    /// Whether this order's area is air-conditioned (drives 5% GST + surcharge).
+    pub is_ac: bool,
+    /// AC surcharge rate (fraction of subtotal) frozen when the order started.
+    pub ac_rate: f64,
+    /// Discount percentage (0–100) applied to the subtotal at billing.
+    pub discount_percent: f64,
     pub cart: Vec<CartLine>,
     pub cart_index: usize,
     pub status: OrderStatus,
@@ -356,16 +347,16 @@ pub struct Order {
 
 impl Order {
     pub fn ac_surcharge(&self) -> f64 {
-        self.area.map_or(0.0, TableArea::ac_surcharge)
+        self.ac_rate
     }
 
-    /// GST rate per India restaurant rules: 5% where tax applies (AC rooms);
+    /// GST rate per India restaurant rules: 5% where tax applies (AC areas);
     /// take-out keeps its existing 8% rate.
     pub fn gst_rate(&self) -> f64 {
         match self.service {
             Service::TakeOut => Service::TakeOut.tax_rate(),
             Service::DineIn => {
-                if self.area == Some(TableArea::ACRooms) {
+                if self.is_ac {
                     0.05
                 } else {
                     Service::DineIn.tax_rate()
@@ -376,15 +367,18 @@ impl Order {
 
     pub fn totals(&self) -> BillTotals {
         let subtotal: f64 = self.cart.iter().map(|line| line.total()).sum();
-        let ac_charge = subtotal * self.ac_surcharge();
+        let discount = subtotal * (self.discount_percent / 100.0);
+        let taxable = subtotal - discount;
+        let ac_charge = taxable * self.ac_surcharge();
         let gst_rate = self.gst_rate();
-        let gst = (subtotal + ac_charge) * gst_rate;
+        let gst = (taxable + ac_charge) * gst_rate;
         BillTotals {
             subtotal,
+            discount,
             ac_charge,
             gst_rate,
             gst,
-            total: subtotal + ac_charge + gst,
+            total: taxable + ac_charge + gst,
         }
     }
 }
@@ -400,15 +394,18 @@ pub struct BillSummary {
 
 #[cfg(test)]
 mod tests {
-    use super::{CartLine, Order, OrderStatus, Service, TableArea, CLEANING_MINUTES};
+    use super::{Area, CartLine, Order, OrderStatus, Service, CLEANING_MINUTES};
 
-    fn order(service: Service, area: Option<TableArea>) -> Order {
+    fn order(service: Service, area: Option<&str>, is_ac: bool, ac_rate: f64) -> Order {
         Order {
             id: 1,
             label: "Test".to_string(),
             service,
             table_number: None,
-            area,
+            area: area.map(|a| a.to_string()),
+            is_ac,
+            ac_rate,
+            discount_percent: 0.0,
             cart: vec![CartLine {
                 name: "Dal Makhani".to_string(),
                 unit_price: 100.0,
@@ -431,20 +428,21 @@ mod tests {
     }
 
     #[test]
-    fn table_areas_have_expected_capacity() {
-        let total: usize = TableArea::all()
-            .into_iter()
-            .map(TableArea::table_count)
-            .sum();
-
+    fn default_areas_keep_expected_capacity() {
+        let total: usize = Area::defaults().iter().map(|a| a.table_count).sum();
         assert_eq!(total, 23);
-        assert_eq!(TableArea::BackGarden.table_count(), 8);
+        let ac = Area::defaults()
+            .into_iter()
+            .find(|a| a.name == "AC Rooms")
+            .unwrap();
+        assert_eq!(ac.table_count, 4);
+        assert!(ac.is_ac);
     }
 
     #[test]
     fn ac_rooms_add_surcharge_and_gst() {
-        // ₹200 food in an AC room: 6% AC charge + 5% GST on (200 + 12).
-        let totals = order(Service::DineIn, Some(TableArea::ACRooms)).totals();
+        // ₹200 food in an AC area: 6% AC charge + 5% GST on (200 + 12).
+        let totals = order(Service::DineIn, Some("AC Rooms"), true, 0.06).totals();
         assert_eq!(totals.subtotal, 200.0);
         assert!((totals.ac_charge - 12.0).abs() < 1e-9);
         assert!((totals.gst - 10.6).abs() < 1e-9);
@@ -453,7 +451,7 @@ mod tests {
 
     #[test]
     fn non_ac_dine_in_has_no_extra_charges() {
-        let totals = order(Service::DineIn, Some(TableArea::MainHall)).totals();
+        let totals = order(Service::DineIn, Some("Main Hall"), false, 0.0).totals();
         assert_eq!(totals.ac_charge, 0.0);
         assert_eq!(totals.gst, 0.0);
         assert_eq!(totals.total, 200.0);
@@ -461,7 +459,7 @@ mod tests {
 
     #[test]
     fn take_out_keeps_existing_tax_rate() {
-        let totals = order(Service::TakeOut, None).totals();
+        let totals = order(Service::TakeOut, None, false, 0.0).totals();
         assert!((totals.gst - 16.0).abs() < 1e-9);
         assert!((totals.total - 216.0).abs() < 1e-9);
     }

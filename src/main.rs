@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -21,14 +22,17 @@ mod receipts;
 
 use db::Database;
 use models::{
-    BillSummary, CartLine, Focus, MenuItem, Order, OrderStatus, PaymentMode, PhysicalTable,
-    Service, TableArea, TableStatus, CLEANING_MINUTES,
+    Area, BillSummary, CartLine, Focus, MenuItem, Offer, Order, OrderStatus, PaymentMode,
+    PhysicalTable, Service, TableStatus, CLEANING_MINUTES,
 };
 use receipts::{load_recent, money, next_bill_number, render_receipt, save_and_print};
 
 /// Where the embedded Turso (SQLite-compatible) database file lives.
 const DB_PATH: &str = "data/billing.db";
 
+/// Operations configured via CSV import/export (see `docs/CONFIGURATION.md`):
+/// dining areas (`areas.csv`), menu items (`menu.csv`), discount offers
+/// (`offers.csv`), and GSTIN / AC surcharge rate (`config.csv`).
 struct App {
     items: Vec<MenuItem>,
     orders: Vec<Order>,  // all open orders (dine-in & take-out)
@@ -36,14 +40,18 @@ struct App {
     next_order_id: u32,
     next_takeout_id: u32,
     physical_tables: Vec<PhysicalTable>, // all physical tables by area
+    areas: Vec<Area>,                    // configurable dining areas (CSV-managed)
+    gst_number: String,                  // registered GSTIN printed on receipts
+    ac_rate: f64,                        // AC surcharge rate (fraction) for AC areas
+    offers: Vec<Offer>,                  // discount offers selectable at billing
     menu_index: usize,
     search: String,
     focus: Focus,
     data_file: PathBuf,
     matcher: SkimMatcherV2,
-    selected_table_area: TableArea, // current area when navigating tables
-    selected_table_index: usize,    // current table index within area
-    notification: String,           // top-left banner message
+    selected_area_index: usize,  // current area when navigating tables
+    selected_table_index: usize, // current table index within area
+    notification: String,        // top-left banner message
     notification_until: Option<chrono::DateTime<Local>>, // dismisses after this time
     recent_bills: Vec<BillSummary>, // newest first, up to five completed bills
     recent_bill_index: usize,
@@ -51,6 +59,8 @@ struct App {
     database: Option<Database>, // None only when the DB could not be opened
     mobile_buffer: String,      // customer mobile captured in the billing prompt
     payment_mode_index: usize,  // selection inside the payment-mode popup
+    offer_index: usize,         // selection inside the offer-selection popup
+    pending_mobile: String,     // customer mobile captured before offer pick
 }
 
 /// Default menu — Indian restaurant items with a fixed price chosen from the
@@ -215,13 +225,11 @@ fn default_menu() -> Vec<MenuItem> {
         .collect()
 }
 
-fn init_physical_tables() -> Vec<PhysicalTable> {
+fn init_physical_tables(areas: &[Area]) -> Vec<PhysicalTable> {
     let mut tables = Vec::new();
-    let areas = TableArea::all();
-
     for area in areas.iter() {
-        for number in 1..=area.table_count() {
-            tables.push(PhysicalTable::ready(*area, number));
+        for number in 1..=area.table_count {
+            tables.push(PhysicalTable::ready(&area.name, number));
         }
     }
     tables
@@ -279,13 +287,23 @@ impl App {
             },
         };
 
-        // Restore unpaid orders and physical table states from the last run.
+        // Restore config, unpaid orders and physical table states from the last run.
         let now = Local::now();
+        let (areas, gst_number, ac_rate, offers) = match &database {
+            Some(db) => (
+                db.load_areas(),
+                db.get_setting("gst_number"),
+                db.get_setting("ac_rate").parse().unwrap_or(0.06),
+                db.load_offers(),
+            ),
+            None => (Area::defaults(), String::new(), 0.06, Vec::new()),
+        };
+
         let (orders, next_order_id, physical_tables) = match &database {
             Some(db) => {
                 let orders = db.load_open_orders();
-                let stored_tables = db.load_tables(now);
-                let mut tables = init_physical_tables();
+                let stored_tables = db.load_tables(&areas, now);
+                let mut tables = init_physical_tables(&areas);
                 for table in &mut tables {
                     if let Some(stored) = stored_tables
                         .iter()
@@ -299,7 +317,7 @@ impl App {
                 // Reconcile: a table marked Ready that still has an open order
                 // follows the order's stage instead (crash-consistency fix).
                 for order in &orders {
-                    if let (Some(area), Some(number)) = (order.area, order.table_number) {
+                    if let (Some(area), Some(number)) = (order.area.clone(), order.table_number) {
                         if let Some(table) = tables
                             .iter_mut()
                             .find(|t| t.area == area && t.number == number)
@@ -320,7 +338,7 @@ impl App {
                 (
                     Vec::new(),
                     next_bill_number(&recent_bills),
-                    init_physical_tables(),
+                    init_physical_tables(&areas),
                 )
             }
         };
@@ -335,12 +353,16 @@ impl App {
             next_order_id,
             next_takeout_id,
             physical_tables,
+            areas,
+            gst_number,
+            ac_rate,
+            offers,
             menu_index: 0,
             search: String::new(),
             focus: Focus::Menu,
             data_file,
             matcher: SkimMatcherV2::default().ignore_case(),
-            selected_table_area: TableArea::FrontGarden,
+            selected_area_index: 0,
             selected_table_index: 0,
             notification: {
                 let storage = if database.is_some() {
@@ -361,12 +383,14 @@ impl App {
             database,
             mobile_buffer: String::new(),
             payment_mode_index: 0,
+            offer_index: 0,
+            pending_mobile: String::new(),
         }
     }
 
     // -- persistence helpers ---------------------------------------------------
 
-    fn persist_table(&self, area: TableArea, number: usize) {
+    fn persist_table(&self, area: &str, number: usize) {
         if let Some(db) = &self.database {
             if let Some(table) = self
                 .physical_tables
@@ -436,20 +460,31 @@ impl App {
         &mut self.orders[self.active_order]
     }
 
+    /// The area the user is currently browsing in the floor-plan view.
+    fn selected_area(&self) -> Option<&Area> {
+        self.areas.get(self.selected_area_index)
+    }
+
+    /// Name of the area currently browsed; empty string when no areas exist.
+    fn selected_area_name(&self) -> String {
+        self.selected_area()
+            .map(|a| a.name.clone())
+            .unwrap_or_default()
+    }
+
     /// Marks the currently selected table as cleaned (back to Ready) when it
     /// is in the Cleaning state.
     fn clean_selected_table(&mut self) {
+        let area = self.selected_area_name();
         let target = self
             .physical_tables
             .iter()
-            .find(|t| {
-                t.area == self.selected_table_area && t.number == self.selected_table_index + 1
-            })
-            .map(|t| (t.area, t.number, t.status));
+            .find(|t| t.area == area && t.number == self.selected_table_index + 1)
+            .map(|t| (t.area.clone(), t.number, t.status));
 
         if let Some((area, table_num, status)) = target {
             if status != TableStatus::Dirty {
-                self.notify(String::from("Selected table is not being cleaned."));
+                self.notify(String::from("Selected table is not being cleaning."));
                 return;
             }
             if let Some(pt) = self
@@ -461,7 +496,7 @@ impl App {
                 pt.dirty_since = None;
                 pt.order_id = None;
             }
-            self.persist_table(area, table_num);
+            self.persist_table(&area, table_num);
             self.notify(format!("Table {table_num} cleaned and ready."));
         }
     }
@@ -470,14 +505,17 @@ impl App {
     /// table Enter marks it cleaned; on an occupied table it switches to that
     /// table's order.
     fn open_table_order(&mut self) {
+        let area = self.selected_area_name();
+        if area.is_empty() {
+            self.notify(String::from("No dining areas configured."));
+            return;
+        }
         // Get table info without holding reference
         let table_info = self
             .physical_tables
             .iter()
-            .find(|t| {
-                t.area == self.selected_table_area && t.number == self.selected_table_index + 1
-            })
-            .map(|t| (t.area, t.number, t.status, t.order_id));
+            .find(|t| t.area == area && t.number == self.selected_table_index + 1)
+            .map(|t| (t.area.clone(), t.number, t.status, t.order_id));
 
         if let Some((area, table_num, status, order_id)) = table_info {
             if status == TableStatus::Dirty {
@@ -500,16 +538,24 @@ impl App {
             self.next_order_id += 1;
             let label = format!(
                 "{}-T{}",
-                area.label().split_whitespace().next().unwrap_or("T"),
+                area.split_whitespace().next().unwrap_or("T"),
                 table_num
             );
+
+            let (is_ac, ac_rate) = self
+                .selected_area()
+                .map(|a| (a.is_ac, self.ac_rate))
+                .unwrap_or((false, 0.0));
 
             let order = Order {
                 id,
                 label,
                 service: Service::DineIn,
                 table_number: Some(table_num),
-                area: Some(area),
+                area: Some(area.clone()),
+                is_ac,
+                ac_rate,
+                discount_percent: 0.0,
                 cart: Vec::new(),
                 cart_index: 0,
                 status: OrderStatus::Ordering,
@@ -529,7 +575,7 @@ impl App {
             }
 
             self.persist_active_order();
-            self.persist_table(area, table_num);
+            self.persist_table(&area, table_num);
             self.notify(format!("Opened order for Table {}", table_num));
         }
     }
@@ -546,6 +592,9 @@ impl App {
             service: Service::TakeOut,
             table_number: None,
             area: None,
+            is_ac: false,
+            ac_rate: 0.0,
+            discount_percent: 0.0,
             cart: Vec::new(),
             cart_index: 0,
             status: OrderStatus::Ordering,
@@ -586,11 +635,12 @@ impl App {
 
         let order = self.order();
         let label = order.label.clone();
-        let table_info = if let (Some(table_num), Some(area)) = (order.table_number, order.area) {
-            Some((table_num, area))
-        } else {
-            None
-        };
+        let table_info =
+            if let (Some(table_num), Some(area)) = (order.table_number, order.area.clone()) {
+                Some((table_num, area))
+            } else {
+                None
+            };
         let closed_id = order.id;
 
         // Record how this bill was settled.
@@ -623,7 +673,7 @@ impl App {
                 pt.order_id = None;
                 pt.dirty_since = Some(Local::now());
             }
-            self.persist_table(area, table_num);
+            self.persist_table(&area, table_num);
             self.notify(format!(
                 "Closed {label} via {mode_display}. Table {table_num} cleaning — auto-ready in {CLEANING_MINUTES} min."
             ));
@@ -643,7 +693,7 @@ impl App {
 
         let (current, table_number, area) = {
             let order = self.order();
-            (order.status, order.table_number, order.area)
+            (order.status, order.table_number, order.area.clone())
         };
 
         match current.advance() {
@@ -659,7 +709,7 @@ impl App {
                     {
                         pt.status = next.table_status();
                     }
-                    self.persist_table(area, table_num);
+                    self.persist_table(&area, table_num);
                 }
                 self.persist_active_order();
                 let stage = match next {
@@ -846,9 +896,10 @@ impl App {
     }
 
     /// Generates, saves, and prints the bill for the active order. `mobile`
-    /// is the customer's 10-digit number (empty when skipped). The mode of
-    /// payment is confirmed later, when the order is closed.
-    fn complete_billing(&mut self, mobile: &str) {
+    /// is the customer's 10-digit number (empty when skipped); `offer_id` is
+    /// the discount offer selected at billing (if any). The mode of payment is
+    /// confirmed later, when the order is closed.
+    fn complete_billing(&mut self, mobile: &str, offer_id: Option<u32>) {
         if self.orders.is_empty() || self.order().status == OrderStatus::Paid {
             return; // stale prompt (e.g. order changed mid-entry); ignore
         }
@@ -857,14 +908,22 @@ impl App {
             return;
         }
 
+        // Apply the chosen discount offer (if any) before computing totals.
+        if let Some(id) = offer_id {
+            if let Some(offer) = self.offers.iter().find(|o| o.id == id) {
+                self.order_mut().discount_percent = offer.discount_percent;
+            }
+        }
+
         let customer_mobile = if mobile.trim().is_empty() {
             None
         } else {
             Some(mobile.trim())
         };
+        let gst_number = self.gst_number.clone();
         let (order_id, order_label, order_service, table_info, totals, bill_text) = {
             let order = self.order();
-            let table_info = match (order.table_number, order.area) {
+            let table_info = match (order.table_number, order.area.clone()) {
                 (Some(table_num), Some(area)) => Some((table_num, area)),
                 _ => None,
             };
@@ -874,7 +933,7 @@ impl App {
                 order.service,
                 table_info,
                 order.totals(),
-                render_receipt(order, customer_mobile),
+                render_receipt(order, customer_mobile, &gst_number),
             )
         };
 
@@ -916,7 +975,7 @@ impl App {
                     {
                         pt.status = TableStatus::Paid;
                     }
-                    self.persist_table(area, table_num);
+                    self.persist_table(&area, table_num);
                 }
                 self.focus = self.focus_return;
             }
@@ -928,18 +987,16 @@ impl App {
 
     fn handle_key(&mut self, key: KeyCode) -> bool {
         // Global quit: q/Esc are captured by the billing prompts while open;
-        // q is ignored while typing in the search box.
-        if matches!(key, KeyCode::Char('q'))
-            && self.focus != Focus::Search
-            && self.focus != Focus::MobileEntry
-            && self.focus != Focus::PaymentMode
-        {
+        // q is ignored while typing in the search box. The offer/payment
+        // popups handle Esc themselves, so they must not quit.
+        let in_protected = matches!(
+            self.focus,
+            Focus::Search | Focus::MobileEntry | Focus::PaymentMode | Focus::OfferSelect
+        );
+        if matches!(key, KeyCode::Char('q')) && !in_protected {
             return true;
         }
-        if matches!(key, KeyCode::Esc)
-            && self.focus != Focus::MobileEntry
-            && self.focus != Focus::PaymentMode
-        {
+        if matches!(key, KeyCode::Esc) && !in_protected {
             return true;
         }
 
@@ -995,43 +1052,8 @@ impl App {
                 }
                 KeyCode::Char('c') => self.clear_active_cart(),
                 KeyCode::Char('p') => self.begin_billing(),
-                KeyCode::Char('e') => {
-                    let res = export_menu_csv(&self.data_file, &self.items);
-                    match res {
-                        Ok(n) => {
-                            if let Some(db) = &self.database {
-                                if let Err(error) = db.replace_menu(&self.items) {
-                                    self.notify(format!("DB menu sync failed: {error}"));
-                                    return false;
-                                }
-                            }
-                            self.notify(format!(
-                                "Exported {n} items to {}.",
-                                self.data_file.display()
-                            ));
-                        }
-                        Err(e) => self.notify(format!("Export failed: {e}")),
-                    }
-                }
-                KeyCode::Char('i') => {
-                    let res = import_menu_csv(&self.data_file);
-                    match res {
-                        Ok(n) => {
-                            self.items = load_menu(&self.data_file).unwrap_or_default();
-                            if let Some(db) = &self.database {
-                                if let Err(error) = db.replace_menu(&self.items) {
-                                    self.notify(format!("DB menu sync failed: {error}"));
-                                    return false;
-                                }
-                            }
-                            self.notify(format!(
-                                "Imported {n} items from {}.",
-                                self.data_file.display()
-                            ));
-                        }
-                        Err(e) => self.notify(format!("Import failed: {e}")),
-                    }
-                }
+                KeyCode::Char('e') => self.export_config(),
+                KeyCode::Char('i') => self.import_config(),
                 _ => {}
             },
             Focus::Cart => match key {
@@ -1066,35 +1088,31 @@ impl App {
                     self.selected_table_index = self.selected_table_index.saturating_sub(1);
                 }
                 KeyCode::Right | KeyCode::Char('l') => {
-                    let max = self.selected_table_area.table_count();
+                    let max = self.selected_area().map_or(0, |a| a.table_count);
                     if self.selected_table_index + 1 < max {
                         self.selected_table_index += 1;
                     }
                 }
-                // ↑/↓ switch between the 4 area bars
+                // ↑/↓ switch between the area bars
                 KeyCode::Up | KeyCode::Char('k') => {
-                    let areas = TableArea::all();
-                    let current_idx = areas
-                        .iter()
-                        .position(|&a| a == self.selected_table_area)
-                        .unwrap_or(0);
-                    let new_idx = if current_idx == 0 { 3 } else { current_idx - 1 };
-                    self.selected_table_area = areas[new_idx];
-                    self.selected_table_index = self
-                        .selected_table_index
-                        .min(self.selected_table_area.table_count() - 1);
+                    if !self.areas.is_empty() {
+                        let n = self.areas.len();
+                        self.selected_area_index = (self.selected_area_index + n - 1) % n;
+                        let max = self.selected_area().map_or(0, |a| a.table_count);
+                        if self.selected_table_index >= max {
+                            self.selected_table_index = max.saturating_sub(1);
+                        }
+                    }
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    let areas = TableArea::all();
-                    let current_idx = areas
-                        .iter()
-                        .position(|&a| a == self.selected_table_area)
-                        .unwrap_or(0);
-                    let new_idx = (current_idx + 1) % 4;
-                    self.selected_table_area = areas[new_idx];
-                    self.selected_table_index = self
-                        .selected_table_index
-                        .min(self.selected_table_area.table_count() - 1);
+                    if !self.areas.is_empty() {
+                        let n = self.areas.len();
+                        self.selected_area_index = (self.selected_area_index + 1) % n;
+                        let max = self.selected_area().map_or(0, |a| a.table_count);
+                        if self.selected_table_index >= max {
+                            self.selected_table_index = max.saturating_sub(1);
+                        }
+                    }
                 }
                 KeyCode::Enter => {
                     self.open_table_order();
@@ -1111,16 +1129,13 @@ impl App {
                 KeyCode::Char('r') => {
                     self.clean_selected_table();
                 }
-                KeyCode::Char('u') => {
-                    self.focus_return = self.focus;
-                    self.focus = Focus::AdminMode;
-                }
                 KeyCode::Char('b') | KeyCode::Char('p') => self.begin_billing(),
                 KeyCode::BackTab => self.focus = Focus::Cart,
                 KeyCode::Tab => self.focus = Focus::RecentBills,
-                KeyCode::Char(d @ '1'..='4') => {
-                    if let Some(area) = TableArea::from_digit(d) {
-                        self.selected_table_area = area;
+                KeyCode::Char(d @ '1'..='9') => {
+                    let idx = (d as u8 - b'1') as usize;
+                    if idx < self.areas.len() {
+                        self.selected_area_index = idx;
                         self.selected_table_index = 0;
                     }
                 }
@@ -1152,7 +1167,14 @@ impl App {
                     KeyCode::Enter => {
                         if self.mobile_buffer.len() == 10 {
                             let mobile = std::mem::take(&mut self.mobile_buffer);
-                            self.complete_billing(&mobile);
+                            if self.offers.is_empty() {
+                                self.complete_billing(&mobile, None);
+                            } else {
+                                // Pick a discount offer (or none) before billing.
+                                self.offer_index = 0;
+                                self.focus = Focus::OfferSelect;
+                                self.pending_mobile = mobile;
+                            }
                         } else {
                             self.notify(format!(
                                 "Mobile number needs 10 digits ({} so far).",
@@ -1194,13 +1216,186 @@ impl App {
                 }
                 _ => {}
             },
-            Focus::AdminMode => {
-                if key == KeyCode::Esc {
-                    self.focus = self.focus_return;
+            Focus::OfferSelect => {
+                let count = self.offers.len() + 1; // +1 for "No discount"
+                match key {
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        self.offer_index = self.offer_index.saturating_sub(1);
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if self.offer_index + 1 < count {
+                            self.offer_index += 1;
+                        }
+                    }
+                    KeyCode::Char(d @ '0'..='9') => {
+                        let idx = (d as u8 - b'0') as usize;
+                        if idx < count {
+                            self.apply_offer_and_bill(idx);
+                        }
+                    }
+                    KeyCode::Enter => self.apply_offer_and_bill(self.offer_index),
+                    KeyCode::Esc => {
+                        self.pending_mobile.clear();
+                        self.focus = self.focus_return;
+                    }
+                    _ => {}
                 }
             }
         }
         false
+    }
+
+    /// Applies the chosen offer (index 0 = no discount) and generates the bill.
+    fn apply_offer_and_bill(&mut self, index: usize) {
+        let offer_id = if index == 0 {
+            None
+        } else {
+            self.offers.get(index - 1).map(|o| o.id)
+        };
+        let mobile = std::mem::take(&mut self.pending_mobile);
+        self.complete_billing(&mobile, offer_id);
+    }
+
+    /// Recomputes the physical-table list from the current area config,
+    /// preserving the status of tables that still exist.
+    fn rebuild_physical_tables(&mut self) {
+        let previous: Vec<PhysicalTable> = self.physical_tables.clone();
+        let mut tables = init_physical_tables(&self.areas);
+        for table in &mut tables {
+            if let Some(old) = previous
+                .iter()
+                .find(|p| p.area == table.area && p.number == table.number)
+            {
+                table.status = old.status;
+                table.order_id = old.order_id;
+                table.dirty_since = old.dirty_since;
+            }
+        }
+        self.physical_tables = tables;
+    }
+
+    /// Writes the full configuration bundle (menu, areas, offers, GSTIN, AC
+    /// rate) to CSV files next to `menu.csv`.
+    fn export_config(&mut self) {
+        let base = self
+            .data_file
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+        let menu_p = base.join("menu.csv");
+        let areas_p = base.join("areas.csv");
+        let offers_p = base.join("offers.csv");
+        let config_p = base.join("config.csv");
+
+        let menu_n = export_menu_csv(&menu_p, &self.items).map_err(|e| e.to_string());
+        let areas_n = export_areas_csv(&areas_p, &self.areas).map_err(|e| e.to_string());
+        let offers_n = export_offers_csv(&offers_p, &self.offers).map_err(|e| e.to_string());
+        let config_ok =
+            export_config_csv(&config_p, &self.gst_number, self.ac_rate).map_err(|e| e.to_string());
+
+        match (menu_n, areas_n, offers_n, config_ok) {
+            (Ok(mn), Ok(an), Ok(on), Ok(())) => self.notify(format!(
+                "Exported config: {mn} items, {an} areas, {on} offers, settings."
+            )),
+            _ => self.notify("Config export failed.".to_string()),
+        }
+    }
+
+    /// Loads the full configuration bundle from CSV files next to `menu.csv`,
+    /// validates, persists to the database, and reloads in-memory state.
+    fn import_config(&mut self) {
+        let base = self
+            .data_file
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+        let menu_p = base.join("menu.csv");
+        let areas_p = base.join("areas.csv");
+        let offers_p = base.join("offers.csv");
+        let config_p = base.join("config.csv");
+
+        let items = match load_menu(&menu_p) {
+            Ok(v) if !v.is_empty() => v,
+            Ok(_) => {
+                self.notify("Import skipped: menu.csv empty.".to_string());
+                return;
+            }
+            Err(e) => {
+                self.notify(format!("Menu import failed: {e}"));
+                return;
+            }
+        };
+
+        let areas = match load_areas_csv(&areas_p) {
+            Ok(v) if !v.is_empty() => v,
+            Ok(_) => {
+                self.notify("Import skipped: areas.csv empty.".to_string());
+                return;
+            }
+            Err(e) => {
+                self.notify(format!("Areas import failed: {e}"));
+                return;
+            }
+        };
+
+        let offers = match load_offers_csv(&offers_p) {
+            Ok(v) => v,
+            Err(e) => {
+                self.notify(format!("Offers import failed: {e}"));
+                return;
+            }
+        };
+
+        let (gst, ac_rate) = match load_config_csv(&config_p) {
+            Ok(map) => (
+                map.get("GSTNumber")
+                    .cloned()
+                    .unwrap_or_else(|| self.gst_number.clone()),
+                map.get("AcRate")
+                    .and_then(|s| s.trim().parse::<f64>().ok())
+                    .map(|p| (p / 100.0).clamp(0.0, 1.0))
+                    .unwrap_or(self.ac_rate),
+            ),
+            Err(e) => {
+                self.notify(format!("Config import failed: {e}"));
+                return;
+            }
+        };
+
+        if let Some(db) = &self.database {
+            if let Err(e) = db.replace_menu(&items) {
+                self.notify(format!("DB menu sync failed: {e}"));
+                return;
+            }
+            if let Err(e) = db.replace_areas(&areas) {
+                self.notify(format!("DB areas sync failed: {e}"));
+                return;
+            }
+            if let Err(e) = db.replace_offers(&offers) {
+                self.notify(format!("DB offers sync failed: {e}"));
+                return;
+            }
+            if let Err(e) = db.set_setting("gst_number", &gst) {
+                self.notify(format!("DB gst sync failed: {e}"));
+                return;
+            }
+            if let Err(e) = db.set_setting("ac_rate", &format!("{:.4}", ac_rate)) {
+                self.notify(format!("DB ac sync failed: {e}"));
+                return;
+            }
+        }
+
+        self.items = items;
+        self.areas = areas;
+        self.offers = if let Some(db) = &self.database {
+            db.load_offers()
+        } else {
+            offers
+        };
+        self.gst_number = gst;
+        self.ac_rate = ac_rate;
+        self.rebuild_physical_tables();
+        self.notify("Imported configuration from CSV files.".to_string());
     }
 }
 
@@ -1247,9 +1442,118 @@ fn export_menu_csv(path: &std::path::Path, items: &[MenuItem]) -> io::Result<usi
     Ok(items.len())
 }
 
-fn import_menu_csv(path: &std::path::Path) -> io::Result<usize> {
-    let items = load_menu(path)?;
-    Ok(items.len())
+// -- areas.csv ---------------------------------------------------------------
+
+fn export_areas_csv(path: &Path, areas: &[Area]) -> io::Result<usize> {
+    let mut wtr = csv::Writer::from_path(path).map_err(io::Error::other)?;
+    wtr.write_record(["Area", "IsAC", "TableCount"])
+        .map_err(io::Error::other)?;
+    for a in areas {
+        wtr.write_record([
+            a.name.clone(),
+            if a.is_ac { "yes" } else { "no" }.to_string(),
+            a.table_count.to_string(),
+        ])
+        .map_err(io::Error::other)?;
+    }
+    wtr.flush()?;
+    Ok(areas.len())
+}
+
+fn load_areas_csv(path: &Path) -> io::Result<Vec<Area>> {
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .from_path(path)
+        .map_err(io::Error::other)?;
+    let mut areas = Vec::new();
+    for row in rdr.records() {
+        let rec = row.map_err(io::Error::other)?;
+        let get = |i: usize| rec.get(i).unwrap_or("").trim().to_string();
+        let name = get(0);
+        if name.is_empty() {
+            continue;
+        }
+        let is_ac = matches!(
+            get(1).to_ascii_lowercase().as_str(),
+            "yes" | "y" | "1" | "true"
+        );
+        let table_count = get(2).parse::<usize>().unwrap_or(1).max(1);
+        areas.push(Area {
+            name,
+            is_ac,
+            table_count,
+        });
+    }
+    Ok(areas)
+}
+
+// -- offers.csv --------------------------------------------------------------
+
+fn export_offers_csv(path: &Path, offers: &[Offer]) -> io::Result<usize> {
+    let mut wtr = csv::Writer::from_path(path).map_err(io::Error::other)?;
+    wtr.write_record(["Name", "DiscountPercent"])
+        .map_err(io::Error::other)?;
+    for o in offers {
+        wtr.write_record([o.name.clone(), format!("{:.0}", o.discount_percent)])
+            .map_err(io::Error::other)?;
+    }
+    wtr.flush()?;
+    Ok(offers.len())
+}
+
+fn load_offers_csv(path: &Path) -> io::Result<Vec<Offer>> {
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .from_path(path)
+        .map_err(io::Error::other)?;
+    let mut offers = Vec::new();
+    for row in rdr.records() {
+        let rec = row.map_err(io::Error::other)?;
+        let get = |i: usize| rec.get(i).unwrap_or("").trim().to_string();
+        let name = get(0);
+        let percent = get(1).parse::<f64>().unwrap_or(0.0).clamp(0.0, 100.0);
+        if name.is_empty() || percent <= 0.0 {
+            continue;
+        }
+        offers.push(Offer {
+            id: 0,
+            name,
+            discount_percent: percent,
+        });
+    }
+    Ok(offers)
+}
+
+// -- config.csv --------------------------------------------------------------
+
+fn export_config_csv(path: &Path, gst_number: &str, ac_rate: f64) -> io::Result<()> {
+    let mut wtr = csv::Writer::from_path(path).map_err(io::Error::other)?;
+    wtr.write_record(["Key", "Value"])
+        .map_err(io::Error::other)?;
+    wtr.write_record(["GSTNumber", gst_number])
+        .map_err(io::Error::other)?;
+    let ac_rate_str = format!("{:.0}", ac_rate * 100.0);
+    wtr.write_record(["AcRate", &ac_rate_str])
+        .map_err(io::Error::other)?;
+    wtr.flush()?;
+    Ok(())
+}
+
+fn load_config_csv(path: &Path) -> io::Result<HashMap<String, String>> {
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .from_path(path)
+        .map_err(io::Error::other)?;
+    let mut map = HashMap::new();
+    for row in rdr.records() {
+        let rec = row.map_err(io::Error::other)?;
+        let key = rec.get(0).unwrap_or("").trim().to_string();
+        let value = rec.get(1).unwrap_or("").trim().to_string();
+        if !key.is_empty() {
+            map.insert(key, value);
+        }
+    }
+    Ok(map)
 }
 
 // Kept only as a reference while migrating receipt handling to `receipts.rs`.
@@ -1460,10 +1764,11 @@ fn ui(f: &mut Frame, app: &App) {
     // smaller terminal, reserve space for the order panels first and hide the
     // history rather than allowing the lower panels to crowd the menu.
     let compact = f.area().height < 33;
+    let tabs_height = (app.areas.len() + 4).clamp(7, 16) as u16;
     let [tabs_area, search_area, body, notification_area, recent_bills_area, footer_area] =
         Layout::vertical(if compact {
             [
-                Constraint::Length(8),
+                Constraint::Length(tabs_height),
                 Constraint::Length(3),
                 Constraint::Min(6),
                 Constraint::Length(2),
@@ -1472,7 +1777,7 @@ fn ui(f: &mut Frame, app: &App) {
             ]
         } else {
             [
-                Constraint::Length(8),
+                Constraint::Length(tabs_height),
                 Constraint::Length(3),
                 Constraint::Fill(1),
                 Constraint::Length(3),
@@ -1499,6 +1804,9 @@ fn ui(f: &mut Frame, app: &App) {
     }
     if app.focus == Focus::PaymentMode {
         render_payment_mode(f, app);
+    }
+    if app.focus == Focus::OfferSelect {
+        render_offer_select(f, app);
     }
 }
 
@@ -1640,6 +1948,89 @@ fn render_payment_mode(f: &mut Frame, app: &App) {
     }
 }
 
+/// Generic centred modal that lists `items` (highlighting `selected`) plus an
+/// optional text-input line when `input` is `Some`.
+fn render_admin_modal(
+    f: &mut Frame,
+    title: &str,
+    title_color: Color,
+    items: &[String],
+    selected: usize,
+    input_label: Option<&str>,
+) {
+    let extra = if input_label.is_some() { 3 } else { 1 };
+    let height = (items.len() as u16) + extra;
+    let area = centered_rect(64, height.clamp(6, 24), f.area());
+    f.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::default()
+                .fg(title_color)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .border_style(Style::default().fg(title_color));
+
+    let mut lines: Vec<Line> = Vec::new();
+    for (idx, item) in items.iter().enumerate() {
+        let is_sel = idx == selected;
+        let marker = if is_sel { "▸ " } else { "  " };
+        lines.push(Line::from(Span::styled(
+            format!("{marker}{item}"),
+            if is_sel {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            },
+        )));
+    }
+    if let Some(label) = input_label {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            format!("▶ {label}: {}_", "_"),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let rows: Vec<Rect> = Layout::vertical(vec![Constraint::Length(1); lines.len()])
+        .flex(Flex::Center)
+        .split(inner)
+        .to_vec();
+    for (line, rect) in lines.into_iter().zip(rows) {
+        f.render_widget(Paragraph::new(line), rect);
+    }
+}
+
+fn render_offer_select(f: &mut Frame, app: &App) {
+    let mut items = vec![String::from("0. No discount")];
+    for (idx, offer) in app.offers.iter().enumerate() {
+        items.push(format!(
+            "{}. {} — {:.0}% off",
+            idx + 1,
+            offer.name,
+            offer.discount_percent
+        ));
+    }
+    let title = match app.orders.get(app.active_order) {
+        Some(order) => format!(
+            "Apply offer — Bill #{} {}",
+            order.id,
+            money(order.totals().total)
+        ),
+        None => String::from("Apply offer"),
+    };
+    render_admin_modal(f, &title, Color::Cyan, &items, app.offer_index, None);
+}
+
 fn render_notification(f: &mut Frame, app: &App, area: Rect) {
     if app.notification.is_empty() {
         return;
@@ -1737,7 +2128,7 @@ fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(Span::styled(
-            " Floor plan — ↑↓: area · ←→: table · 1–4: jump · Enter: open/switch/clean · s: next stage ",
+            " Floor plan — ↑↓: area · ←→: table · 1–9: jump · Enter: open/switch/clean · s: next stage ",
             title_style,
         ))
         .border_style(border_style);
@@ -1746,40 +2137,35 @@ fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(block.clone(), area);
     let inner = block.inner(area);
 
-    let rows: Vec<Rect> = Layout::vertical([
-        Constraint::Length(1), // Front Garden
-        Constraint::Length(1), // AC Rooms
-        Constraint::Length(1), // Main Hall
-        Constraint::Length(1), // Back Garden
-        Constraint::Length(1), // TakeOut
-        Constraint::Length(1), // Legend
-    ])
-    .split(inner)
-    .to_vec();
+    let area_count = app.areas.len();
+    let mut constraints = vec![Constraint::Length(1); area_count];
+    constraints.push(Constraint::Length(1)); // TakeOut
+    constraints.push(Constraint::Length(1)); // Legend
+    let rows: Vec<Rect> = Layout::vertical(constraints).split(inner).to_vec();
 
-    let areas = TableArea::all();
     let now = Local::now();
 
-    // One horizontal bar per physical area.
-    for (bar_i, area_type) in areas.iter().enumerate() {
-        let is_focused_bar = active && app.selected_table_area == *area_type;
+    // One horizontal bar per configured area.
+    for (bar_i, area_type) in app.areas.iter().enumerate() {
+        let is_focused_bar = active && app.selected_area_index == bar_i;
 
         // Free-seating summary for the area label.
         let free = app
             .physical_tables
             .iter()
-            .filter(|t| t.area == *area_type && t.status == TableStatus::Ready)
+            .filter(|t| t.area == area_type.name && t.status == TableStatus::Ready)
             .count();
-        let total = area_type.table_count();
+        let total = area_type.table_count;
 
         let (label_fg, label_mod) = if is_focused_bar {
             (Color::Yellow, Modifier::BOLD | Modifier::REVERSED)
         } else {
             (Color::DarkGray, Modifier::BOLD)
         };
+        let ac_tag = if area_type.is_ac { " (AC)" } else { "" };
         let mut spans = vec![
             Span::styled(
-                format!(" {:<12}", area_type.label()),
+                format!(" {:<16}{}", area_type.name, ac_tag),
                 Style::default().fg(label_fg).add_modifier(label_mod),
             ),
             Span::styled(
@@ -1792,7 +2178,7 @@ fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
             let table = app
                 .physical_tables
                 .iter()
-                .find(|t| t.area == *area_type && t.number == table_num);
+                .find(|t| t.area == area_type.name && t.number == table_num);
 
             let status = table.map_or(TableStatus::Ready, |t| t.status);
             let glyph = match status {
@@ -1881,7 +2267,7 @@ fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(Color::DarkGray),
         ));
     }
-    f.render_widget(Line::from(tk_spans), rows[4]);
+    f.render_widget(Line::from(tk_spans), rows[area_count]);
 
     // Lifecycle legend.
     let legend = Line::from(vec![
@@ -1897,7 +2283,7 @@ fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
             TableStatus::Dirty.color(),
         ),
     ]);
-    f.render_widget(legend, rows[5]);
+    f.render_widget(legend, rows[area_count + 1]);
 }
 
 fn render_search(f: &mut Frame, app: &App, area: Rect) {
@@ -2145,9 +2531,9 @@ fn render_footer(f: &mut Frame, _app: &App, area: Rect) {
                 " Floor plan: Enter open/switch/clean · s next stage · t takeout · c close paid ",
             ),
             Line::from(
-                " Bill: +/- qty · x remove line · c clear · p bill (mobile + payment mode) ",
+                " Bill: +/- qty · x remove line · c clear · p bill (mobile + offer + payment mode) ",
             ),
-            Line::from(" e/i menu export/import (DB synced) · q/Esc quit "),
+            Line::from(" e/i: export/import full config (menu, areas, offers, GST, AC) to CSV · q/Esc quit "),
         ]
     };
     f.render_widget(Paragraph::new(help).style(Style::default().dim()), area);

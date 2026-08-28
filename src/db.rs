@@ -14,13 +14,13 @@ use tokio::sync::Mutex;
 use turso::{Connection, Row, Value};
 
 use crate::models::{
-    BillTotals, CartLine, MenuItem, Order, OrderStatus, PhysicalTable, Service, TableArea,
+    Area, BillTotals, CartLine, MenuItem, Offer, Order, OrderStatus, PhysicalTable, Service,
     TableStatus, CLEANING_MINUTES,
 };
 
 const TIMESTAMP_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 
-const SCHEMA: [&str; 6] = [
+const SCHEMA: [&str; 9] = [
     "CREATE TABLE IF NOT EXISTS menu_items (
          name     TEXT PRIMARY KEY,
          category TEXT NOT NULL,
@@ -73,6 +73,21 @@ const SCHEMA: [&str; 6] = [
          order_id   INTEGER,
          updated_at TEXT NOT NULL,
          PRIMARY KEY (area, number)
+     )",
+    "CREATE TABLE IF NOT EXISTS areas (
+         name        TEXT PRIMARY KEY,
+         is_ac       INTEGER NOT NULL DEFAULT 0,
+         table_count INTEGER NOT NULL CHECK (table_count >= 0),
+         sort_order  INTEGER NOT NULL DEFAULT 0
+     )",
+    "CREATE TABLE IF NOT EXISTS settings (
+         key   TEXT PRIMARY KEY,
+         value TEXT NOT NULL
+     )",
+    "CREATE TABLE IF NOT EXISTS offers (
+         id                INTEGER PRIMARY KEY AUTOINCREMENT,
+         name              TEXT NOT NULL,
+         discount_percent  REAL NOT NULL CHECK (discount_percent >= 0 AND discount_percent <= 100)
      )",
 ];
 
@@ -140,6 +155,23 @@ impl Database {
                     (),
                 )
                 .await;
+            // Migration for databases created before AC flags were stored on
+            // open orders (the values are recomputed from the area at reload).
+            let _ = conn
+                .execute(
+                    "ALTER TABLE open_orders ADD COLUMN is_ac INTEGER NOT NULL DEFAULT 0",
+                    (),
+                )
+                .await;
+            let _ = conn
+                .execute(
+                    "ALTER TABLE open_orders ADD COLUMN ac_rate REAL NOT NULL DEFAULT 0",
+                    (),
+                )
+                .await;
+
+            // Seed the dynamic configuration the first time the schema exists.
+            Self::seed_defaults(&conn).await;
             Ok(())
         })
     }
@@ -201,6 +233,185 @@ impl Database {
         })
     }
 
+    // -- areas / settings / offers -------------------------------------------
+
+    /// Populates the dynamic configuration the first time the database is
+    /// created: the seed dining areas and the default GST/AC settings.
+    async fn seed_defaults(conn: &Connection) {
+        let count: i64 = {
+            let mut rows = conn
+                .query("SELECT COUNT(*) FROM areas", ())
+                .await
+                .unwrap_or_else(|_| panic!("seed count"));
+            let row = rows.next().await.expect("seed row").expect("seed value");
+            row_i64(&row, 0)
+        };
+        if count == 0 {
+            for (idx, area) in crate::models::Area::defaults().into_iter().enumerate() {
+                let _ = conn
+                    .execute(
+                        "INSERT INTO areas (name, is_ac, table_count, sort_order)
+                         VALUES (?1, ?2, ?3, ?4)",
+                        (
+                            area.name,
+                            area.is_ac as i64,
+                            area.table_count as i64,
+                            idx as i64,
+                        ),
+                    )
+                    .await;
+            }
+        }
+        let _ = conn
+            .execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES ('gst_number', '')",
+                (),
+            )
+            .await;
+        let _ = conn
+            .execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES ('ac_rate', '0.06')",
+                (),
+            )
+            .await;
+    }
+
+    /// Loads areas in display order.
+    pub fn load_areas(&self) -> Vec<Area> {
+        self.rt.block_on(async {
+            let conn = self.conn.lock().await;
+            let mut rows = match conn
+                .query(
+                    "SELECT name, is_ac, table_count FROM areas ORDER BY sort_order, name",
+                    (),
+                )
+                .await
+            {
+                Ok(rows) => rows,
+                Err(_) => return crate::models::Area::defaults(),
+            };
+            let mut areas = Vec::new();
+            while let Ok(Some(row)) = rows.next().await {
+                areas.push(Area {
+                    name: row_string(&row, 0),
+                    is_ac: row_i64(&row, 1) != 0,
+                    table_count: row_i64(&row, 2).max(0) as usize,
+                });
+            }
+            if areas.is_empty() {
+                crate::models::Area::defaults()
+            } else {
+                areas
+            }
+        })
+    }
+
+    /// Replaces the entire area configuration. Any in-memory physical tables
+    /// are rebuilt by the caller afterwards.
+    pub fn replace_areas(&self, areas: &[Area]) -> Result<(), String> {
+        self.rt.block_on(async {
+            let conn = self.conn.lock().await;
+            conn.execute("DELETE FROM tables", ())
+                .await
+                .map_err(|e| e.to_string())?;
+            conn.execute("DELETE FROM areas", ())
+                .await
+                .map_err(|e| e.to_string())?;
+            for (i, area) in areas.iter().enumerate() {
+                conn.execute(
+                    "INSERT INTO areas (name, is_ac, table_count, sort_order) VALUES (?1, ?2, ?3, ?4)",
+                    (
+                        area.name.clone(),
+                        area.is_ac as i64,
+                        area.table_count as i64,
+                        i as i64,
+                    ),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        })
+    }
+
+    pub fn get_setting(&self, key: &str) -> String {
+        self.rt.block_on(async {
+            let conn = self.conn.lock().await;
+            let mut rows = match conn
+                .query(
+                    "SELECT value FROM settings WHERE key = ?1",
+                    [key.to_string()],
+                )
+                .await
+            {
+                Ok(rows) => rows,
+                Err(_) => return String::new(),
+            };
+            match rows.next().await {
+                Ok(Some(row)) => row_string(&row, 0),
+                _ => String::new(),
+            }
+        })
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<(), String> {
+        self.rt.block_on(async {
+            let conn = self.conn.lock().await;
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = ?2",
+                (key.to_string(), value.to_string()),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+        })
+    }
+
+    pub fn load_offers(&self) -> Vec<Offer> {
+        self.rt.block_on(async {
+            let conn = self.conn.lock().await;
+            let mut rows = match conn
+                .query(
+                    "SELECT id, name, discount_percent FROM offers ORDER BY id",
+                    (),
+                )
+                .await
+            {
+                Ok(rows) => rows,
+                Err(_) => return Vec::new(),
+            };
+            let mut offers = Vec::new();
+            while let Ok(Some(row)) = rows.next().await {
+                offers.push(Offer {
+                    id: row_i64(&row, 0) as u32,
+                    name: row_string(&row, 1),
+                    discount_percent: row_f64(&row, 2),
+                });
+            }
+            offers
+        })
+    }
+
+    /// Replaces the entire offer list (ids are reassigned on reload).
+    pub fn replace_offers(&self, offers: &[Offer]) -> Result<(), String> {
+        self.rt.block_on(async {
+            let conn = self.conn.lock().await;
+            conn.execute("DELETE FROM offers", ())
+                .await
+                .map_err(|e| e.to_string())?;
+            for offer in offers {
+                conn.execute(
+                    "INSERT INTO offers (name, discount_percent) VALUES (?1, ?2)",
+                    (offer.name.clone(), offer.discount_percent),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        })
+    }
+
     // -- orders ---------------------------------------------------------------
 
     /// Next bill number: one past the highest stored order id.
@@ -229,7 +440,7 @@ impl Database {
                     order.label.clone(),
                     order.service.label(),
                     order.table_number.map(|number| number as i64),
-                    order.area.map(|area| area.label()),
+                    order.area.clone(),
                     mobile,
                     totals.subtotal,
                     totals.ac_charge,
@@ -287,16 +498,19 @@ impl Database {
             .await
             .map_err(|e| e.to_string())?;
             tx.execute(
-                "INSERT INTO open_orders (id, label, service, table_number, area, status)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "INSERT INTO open_orders (id, label, service, table_number, area, is_ac, ac_rate, status)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(id) DO UPDATE SET
-                     label = ?2, service = ?3, table_number = ?4, area = ?5, status = ?6",
+                     label = ?2, service = ?3, table_number = ?4, area = ?5, is_ac = ?6,
+                     ac_rate = ?7, status = ?8",
                 (
                     i64::from(order.id),
                     order.label.clone(),
                     order.service.label(),
                     order.table_number.map(|number| number as i64),
-                    order.area.map(|area| area.label()),
+                    order.area.clone(),
+                    order.is_ac as i64,
+                    order.ac_rate,
                     order.status.label(),
                 ),
             )
@@ -338,7 +552,9 @@ impl Database {
             label: String,
             service: Option<Service>,
             table_number: Option<usize>,
-            area: Option<TableArea>,
+            area: Option<String>,
+            is_ac: bool,
+            ac_rate: f64,
             status: OrderStatus,
         }
 
@@ -347,7 +563,7 @@ impl Database {
             let mut out = Vec::new();
             let Ok(mut stmt) = conn
                 .prepare(
-                    "SELECT id, label, service, table_number, area, status
+                    "SELECT id, label, service, table_number, area, is_ac, ac_rate, status
                      FROM open_orders ORDER BY id",
                 )
                 .await
@@ -363,8 +579,17 @@ impl Database {
                     label: row_string(&row, 1),
                     service: Service::parse(&row_string(&row, 2)),
                     table_number: row_opt_i64(&row, 3).map(|n| n as usize),
-                    area: TableArea::parse(&row_string(&row, 4)),
-                    status: OrderStatus::parse(&row_string(&row, 5))
+                    area: {
+                        let raw = row_string(&row, 4);
+                        if raw.is_empty() {
+                            None
+                        } else {
+                            Some(raw)
+                        }
+                    },
+                    is_ac: row_i64(&row, 5) != 0,
+                    ac_rate: row_f64(&row, 6),
+                    status: OrderStatus::parse(&row_string(&row, 7))
                         .unwrap_or(OrderStatus::Ordering),
                 });
             }
@@ -406,6 +631,9 @@ impl Database {
                     service,
                     table_number: header.table_number,
                     area: header.area,
+                    is_ac: header.is_ac,
+                    ac_rate: header.ac_rate,
+                    discount_percent: 0.0,
                     cart,
                     cart_index: 0,
                     status: header.status,
@@ -427,7 +655,7 @@ impl Database {
                  ON CONFLICT(area, number) DO UPDATE SET
                      status = ?3, order_id = ?4, updated_at = ?5",
                 (
-                    table.area.label(),
+                    table.area.clone(),
                     table.number as i64,
                     table.status.label(),
                     table.order_id.map(i64::from),
@@ -443,7 +671,7 @@ impl Database {
     /// Loads every stored table. Tables in the Cleaning state whose window has
     /// elapsed (relative to `now`) come back as Ready; tables that are unknown
     /// to the current layout are ignored.
-    pub fn load_tables(&self, now: DateTime<Local>) -> Vec<PhysicalTable> {
+    pub fn load_tables(&self, areas: &[Area], now: DateTime<Local>) -> Vec<PhysicalTable> {
         #[allow(clippy::type_complexity)]
         let raw: Vec<(String, usize, String, Option<u32>, Option<NaiveDateTime>)> =
             self.rt.block_on(async {
@@ -476,8 +704,8 @@ impl Database {
 
         raw.into_iter()
             .filter_map(|(area_raw, number, status_raw, order_id, updated_at)| {
-                let area = TableArea::parse(&area_raw)?;
-                if number < 1 || number > area.table_count() {
+                let area = areas.iter().find(|a| a.name == area_raw)?;
+                if number < 1 || number > area.table_count {
                     return None;
                 }
                 let mut status = TableStatus::parse(&status_raw)?;
@@ -499,7 +727,7 @@ impl Database {
                 }
                 Some(PhysicalTable {
                     number,
-                    area,
+                    area: area_raw.clone(),
                     status,
                     order_id,
                     dirty_since,
@@ -643,7 +871,7 @@ static NEXT_TEST_DB_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomic
 mod tests {
     use super::Database;
     use crate::models::{
-        CartLine, MenuItem, Order, OrderStatus, PhysicalTable, Service, TableArea, TableStatus,
+        Area, CartLine, MenuItem, Order, OrderStatus, PhysicalTable, Service, TableStatus,
     };
     use chrono::Local;
 
@@ -653,7 +881,10 @@ mod tests {
             label: "Main-T1".to_string(),
             service: Service::DineIn,
             table_number: Some(1),
-            area: Some(TableArea::MainHall),
+            area: Some("Main Hall".to_string()),
+            is_ac: false,
+            ac_rate: 0.0,
+            discount_percent: 0.0,
             cart: vec![
                 CartLine {
                     name: "Samosa".to_string(),
@@ -698,7 +929,9 @@ mod tests {
 
         let order7 = sample_order(7);
         let mut ac = sample_order(8);
-        ac.area = Some(TableArea::ACRooms);
+        ac.area = Some("AC Rooms".to_string());
+        ac.is_ac = true;
+        ac.ac_rate = 0.06;
         db.save_paid_order(&order7, "9876543210", &order7.totals())
             .unwrap();
         db.save_paid_order(&ac, "9123456780", &ac.totals()).unwrap();
@@ -744,6 +977,9 @@ mod tests {
             service: Service::TakeOut,
             table_number: None,
             area: None,
+            is_ac: false,
+            ac_rate: 0.0,
+            discount_percent: 0.0,
             cart: vec![CartLine {
                 name: "Veg / Chicken Momos".to_string(),
                 unit_price: 65.0,
@@ -769,7 +1005,7 @@ mod tests {
         let back = restored.iter().find(|o| o.id == 11).unwrap();
         assert_eq!(back.label, "Main-T1");
         assert_eq!(back.status, OrderStatus::Serving);
-        assert_eq!(back.area, Some(TableArea::MainHall));
+        assert_eq!(back.area, Some("Main Hall".to_string()));
         assert_eq!(back.cart.len(), 3);
         assert_eq!(back.cart[2].name, "Gulab Jamun");
 
@@ -788,9 +1024,9 @@ mod tests {
         let now = Local::now();
         let db = Database::open_for_tests();
 
-        let mut dirty_old = PhysicalTable::ready(TableArea::FrontGarden, 1);
+        let mut dirty_old = PhysicalTable::ready("Front Garden", 1);
         dirty_old.status = TableStatus::Dirty;
-        let mut dirty_new = PhysicalTable::ready(TableArea::BackGarden, 8);
+        let mut dirty_new = PhysicalTable::ready("Back Garden", 8);
         dirty_new.status = TableStatus::Dirty;
 
         db.upsert_table(&dirty_old).unwrap();
@@ -806,7 +1042,7 @@ mod tests {
             .unwrap();
         });
 
-        let loaded = db.load_tables(now);
+        let loaded = db.load_tables(&Area::defaults(), now);
         assert_eq!(loaded.len(), 2);
         let fg1 = loaded.iter().find(|t| t.number == 1).unwrap();
         assert_eq!(fg1.status, TableStatus::Ready);
@@ -826,7 +1062,7 @@ mod tests {
             .await
             .unwrap();
         });
-        assert_eq!(db.load_tables(now).len(), 2);
+        assert_eq!(db.load_tables(&Area::defaults(), now).len(), 2);
     }
 
     #[test]
