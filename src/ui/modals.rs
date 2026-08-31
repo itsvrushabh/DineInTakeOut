@@ -218,3 +218,20 @@ pub fn render_offer_select(f: &mut Frame, app: &App) {
     };
     render_admin_modal(f, &title, Color::Cyan, &items, app.offer_index, None);
 }
+pub fn render_help(f: &mut Frame, _app: &App) {
+    let area = centered_rect(60, 10, f.area());
+    f.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Key Bindings (?) ");
+    let text = vec![
+        Line::from("Tab/Shift+Tab: focus"),
+        Line::from("↑↓/j/k: select"),
+        Line::from("/: search · Enter/Space: add"),
+        Line::from("Delete/x: remove · +/- qty"),
+        Line::from("c: cancel/close"),
+        Line::from("p: bill · q: quit"),
+    ];
+    let p = Paragraph::new(text).block(block).alignment(Alignment::Center);
+    f.render_widget(p, area);
+}

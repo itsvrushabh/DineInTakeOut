@@ -51,6 +51,8 @@ pub struct App {
     pub payment_mode_index: usize,  // selection inside the payment-mode popup
     pub offer_index: usize,         // selection inside the offer-selection popup
     pub pending_mobile: String,     // customer mobile captured before offer pick
+    pub show_help: bool,
+
 }
 
 impl App {
@@ -197,6 +199,7 @@ impl App {
             payment_mode_index: 0,
             offer_index: 0,
             pending_mobile: String::new(),
+            show_help: false,
         }
     }
 
@@ -754,6 +757,7 @@ impl App {
                 self.recent_bill_index = 0;
                 self.notify(format!("Bill #{} saved to database.", order_id));
 
+
                 self.order_mut().status = OrderStatus::Paid;
 
                 if let Some((table_num, area)) = table_info {
@@ -780,6 +784,12 @@ impl App {
         if matches!(key, KeyCode::Esc) && !in_protected {
             return true;
         }
+
+        if matches!(key, KeyCode::Char('?')) {
+            self.show_help = !self.show_help;
+            return false;
+        }
+
 
         if self.focus != Focus::Search {
             if matches!(key, KeyCode::Char(']')) {

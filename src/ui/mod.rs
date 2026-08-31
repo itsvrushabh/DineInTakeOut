@@ -22,7 +22,7 @@ use crate::{
         floor_plan::render_tabs,
         footer::render_footer,
         menu::render_menu,
-        modals::{render_mobile_entry, render_offer_select, render_payment_mode},
+        modals::{render_help, render_mobile_entry, render_offer_select, render_payment_mode},
         notifications::render_notification,
         recent_bills::render_recent_bills,
         search::render_search,
@@ -75,6 +75,9 @@ pub fn ui(f: &mut Frame, app: &App) {
     }
     if app.focus == Focus::OfferSelect {
         render_offer_select(f, app);
+    }
+    if app.show_help {
+        render_help(f, app);
     }
 }
 
