@@ -387,21 +387,6 @@ impl App {
         self.notify(format!("Opened take-out order TK{}.", tk_count));
     }
 
-    pub fn close_order(&mut self) {
-        if self.orders.is_empty() {
-            self.notify(String::from("No orders to close."));
-            return;
-        }
-
-        if self.order().status != OrderStatus::Paid {
-            self.cancel_order();
-            return;
-        }
-
-        self.payment_mode_index = 0;
-        self.focus_return = self.focus;
-        self.focus = Focus::PaymentMode;
-    }
     pub fn cancel_order(&mut self) {
         let order = self.order();
         let table_info = order.table_number.and_then(|num| order.area.as_ref().map(|area| (num, area.clone())));
@@ -430,7 +415,23 @@ impl App {
         self.notify(format!("Order #{} cancelled.", closed_id));
     }
 
+    pub fn close_order(&mut self) {
+        if self.orders.is_empty() {
+            self.notify(String::from("No orders to close."));
+            return;
+        }
 
+        let order = self.order();
+        if order.status == OrderStatus::Paid {
+            self.payment_mode_index = 0;
+            self.focus_return = self.focus;
+            self.focus = Focus::PaymentMode;
+        } else if order.cart.is_empty() {
+            self.cancel_order();
+        } else {
+            self.notify(String::from("Cannot close order with items. Generate bill first."));
+        }
+    }
     pub fn perform_close_with_mode(&mut self, mode: PaymentMode) {
         if self.orders.is_empty() || self.order().status != OrderStatus::Paid {
             return;
@@ -438,12 +439,7 @@ impl App {
 
         let order = self.order();
         let label = order.label.clone();
-        let table_info =
-            if let (Some(table_num), Some(area)) = (order.table_number, order.area.clone()) {
-                Some((table_num, area))
-            } else {
-                None
-            };
+        let table_info = order.table_number.and_then(|num| order.area.as_ref().map(|area| (num, area.clone())));
         let closed_id = order.id;
 
         if let Some(db) = &self.database {
@@ -482,6 +478,8 @@ impl App {
 
         self.notify(format!("Closed {label} via {mode_display}."));
     }
+
+
 
     pub fn advance_stage(&mut self) {
         if self.orders.is_empty() {
