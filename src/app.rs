@@ -422,8 +422,7 @@ impl App {
         }
 
         if self.order().status != OrderStatus::Paid {
-            let label = self.order().label.clone();
-            self.notify(format!("Generate the bill for {label} before closing it."));
+            self.cancel_order();
             return;
         }
 
@@ -431,6 +430,34 @@ impl App {
         self.focus_return = self.focus;
         self.focus = Focus::PaymentMode;
     }
+    pub fn cancel_order(&mut self) {
+        let order = self.order();
+        let table_info = order.table_number.and_then(|num| order.area.as_ref().map(|area| (num, area.clone())));
+        let closed_id = order.id;
+
+        self.orders.remove(self.active_order);
+        if self.active_order >= self.orders.len() && !self.orders.is_empty() {
+            self.active_order = self.orders.len() - 1;
+        }
+        
+        if let Some(db) = &self.database {
+            let _ = db.delete_open_order(closed_id);
+        }
+
+        if let Some((table_num, area)) = table_info {
+            if let Some(pt) = self
+                .physical_tables
+                .iter_mut()
+                .find(|t| t.area == area && t.number == table_num)
+            {
+                pt.status = TableStatus::Ready;
+                pt.order_id = None;
+            }
+            self.persist_table(&area, table_num);
+        }
+        self.notify(format!("Order #{} cancelled.", closed_id));
+    }
+
 
     pub fn perform_close_with_mode(&mut self, mode: PaymentMode) {
         if self.orders.is_empty() || self.order().status != OrderStatus::Paid {
