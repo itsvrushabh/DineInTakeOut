@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 use turso::{Connection, Row, Value};
 
 use crate::models::{
-    Area, BillTotals, CartLine, MenuItem, Offer, Order, OrderStatus, PhysicalTable, Service,
+    Area, BillSummary, BillTotals, CartLine, MenuItem, Offer, Order, OrderStatus, PhysicalTable, Service,
     TableStatus, CLEANING_MINUTES,
 };
 
@@ -651,6 +651,30 @@ impl Database {
 
     // -- physical tables ------------------------------------------------------
 
+    pub fn load_recent_bills(&self) -> Vec<BillSummary> {
+        self.rt.block_on(async {
+            let mut conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT id, label, service, total FROM orders ORDER BY id DESC LIMIT 5",
+                    (),
+                )
+                .await
+                .unwrap();
+
+            let mut bills = Vec::new();
+            while let Ok(Some(row)) = rows.next().await {
+                bills.push(BillSummary {
+                    id: row_i64(&row, 0) as u32,
+                    label: row_string(&row, 1),
+                    service: Service::parse(&row_string(&row, 2)).unwrap_or(Service::DineIn),
+                    total: row_f64(&row, 3),
+                    receipt: String::new(), // Reconstruct on demand
+                });
+            }
+            bills
+        })
+    }
     /// Upserts the state of one physical table.
     pub fn upsert_table(&self, table: &PhysicalTable) -> Result<(), String> {
         let updated_at = Local::now().format(TIMESTAMP_FORMAT).to_string();

@@ -18,7 +18,7 @@ use crate::{
         Area, BillSummary, CartLine, Focus, MenuItem, Offer, Order, OrderStatus, PaymentMode,
         PhysicalTable, Service, TableStatus, CLEANING_MINUTES,
     },
-    receipts::{load_recent, next_bill_number, render_receipt, save_and_print},
+    receipts::{render_receipt},
 };
 
 pub const DB_PATH: &str = "data/billing.db";
@@ -142,21 +142,25 @@ impl App {
                 (orders, bill_number, tables)
             }
             None => {
-                let recent_bills = load_recent();
+                let recent_bills: Vec<BillSummary> = Vec::new();
                 (
                     Vec::new(),
-                    next_bill_number(&recent_bills),
+                    1,
                     init_physical_tables(&areas),
                 )
             }
         };
 
-        let recent_bills = load_recent();
+        let recent_bills = if let Some(db) = &database {
+            db.load_recent_bills()
+        } else {
+            Vec::new()
+        };
         let next_takeout_id = max_takeout_number(&orders).saturating_add(1);
 
         Self {
             items,
-            orders,
+            orders: orders.to_vec(),
             active_order: 0,
             next_order_id,
             next_takeout_id,
@@ -703,18 +707,18 @@ impl App {
             )
         };
 
-        match save_and_print(&bill_text, order_id) {
-            Ok(msg) => {
-                let mut db_error: Option<String> = None;
-                if let Some(db) = &self.database {
-                    if let Err(error) = db.save_paid_order(self.order(), mobile.trim(), &totals) {
-                        db_error = Some(error);
-                    }
-                    let _ = db.delete_open_order(order_id);
-                }
-                if let Some(error) = db_error {
-                    self.notify(format!("DB save failed: {error}"));
-                }
+        let mut db_error: Option<String> = None;
+        if let Some(db) = &self.database {
+            if let Err(error) = db.save_paid_order(self.order(), mobile.trim(), &totals) {
+                db_error = Some(error);
+            }
+            let _ = db.delete_open_order(order_id);
+        }
+        if let Some(error) = db_error {
+            self.notify(format!("DB save failed: {error}"));
+        }
+
+                
                 let summary = BillSummary {
                     id: order_id,
                     label: order_label.clone(),
@@ -725,7 +729,7 @@ impl App {
                 self.recent_bills.insert(0, summary);
                 self.recent_bills.truncate(5);
                 self.recent_bill_index = 0;
-                self.notify(msg);
+                self.notify(format!("Bill #{} saved to database.", order_id));
 
                 self.order_mut().status = OrderStatus::Paid;
 
@@ -740,9 +744,6 @@ impl App {
                     self.persist_table(&area, table_num);
                 }
                 self.focus = self.focus_return;
-            }
-            Err(e) => self.notify(format!("Print failed: {e}")),
-        }
     }
 
     pub fn handle_key(&mut self, key: KeyCode) -> bool {
