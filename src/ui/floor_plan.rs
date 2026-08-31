@@ -32,10 +32,10 @@ pub fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(Span::styled(
-            " Floor plan ",
-            title_style,
-        ))
+        .title(Line::from(vec![
+            Span::styled(" Floor plan ", title_style),
+            Span::styled(" (Press ? for help) ", Style::default().fg(Color::DarkGray)),
+        ]))
         .border_style(border_style);
 
     f.render_widget(block.clone(), area);
