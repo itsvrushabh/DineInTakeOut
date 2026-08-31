@@ -228,6 +228,7 @@ pub fn render_help(f: &mut Frame, _app: &App) {
         Line::from("Tab/Shift+Tab: Focus between panels"),
         Line::from("↑↓/j/k: Select item/area/bill"),
         Line::from("←→/h/l: Select table in area"),
+        Line::from("[/]: Cycle orders"),
         Line::from("1-9: Jump to table area"),
         Line::from("/: Focus menu search"),
         Line::from("Enter: Add item / Open table / Pay"),
