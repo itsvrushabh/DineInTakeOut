@@ -144,7 +144,7 @@ impl App {
                 (orders, bill_number, tables)
             }
             None => {
-                let recent_bills: Vec<BillSummary> = Vec::new();
+                let _recent_bills: Vec<BillSummary> = Vec::new();
                 (
                     Vec::new(),
                     1,

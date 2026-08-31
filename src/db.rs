@@ -653,7 +653,7 @@ impl Database {
 
     pub fn load_recent_bills(&self) -> Vec<BillSummary> {
         self.rt.block_on(async {
-            let mut conn = self.conn.lock().await;
+            let conn = self.conn.lock().await;
             let mut rows = conn
                 .query(
                     "SELECT id, label, service, total FROM orders ORDER BY id DESC LIMIT 5",
