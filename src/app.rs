@@ -590,35 +590,27 @@ impl App {
             return;
         }
 
-        enum Outcome {
-            Message(String),
-            RemoveLine,
-        }
 
-        let outcome = {
+        let message = {
             let order = self.order_mut();
             if order.cart_index >= order.cart.len() {
-                Outcome::Message(String::from("No item selected in the bill."))
+                String::from("No item selected in the bill.")
             } else if change > 0 {
                 order.cart[order.cart_index].qty += change as u32;
                 let name = order.cart[order.cart_index].name.clone();
-                Outcome::Message(format!("Increased {name}."))
+                format!("Increased {name}.")
             } else if order.cart[order.cart_index].qty > 1 {
                 order.cart[order.cart_index].qty -= (-change) as u32;
                 let name = order.cart[order.cart_index].name.clone();
-                Outcome::Message(format!("Decreased {name}."))
+                format!("Decreased {name}.")
             } else {
-                Outcome::RemoveLine
+                String::from("Cannot decrease below 1.")
             }
         };
 
-        match outcome {
-            Outcome::Message(message) => {
-                self.notify(message);
-                self.persist_active_order();
-            }
-            Outcome::RemoveLine => self.remove_selected_line(),
-        }
+        self.notify(message);
+        self.persist_active_order();
+
     }
 
     pub fn clear_active_cart(&mut self) {
@@ -676,6 +668,10 @@ impl App {
         }
         if self.order().cart.is_empty() {
             self.notify(String::from("Cart is empty."));
+            return;
+        }
+        if self.order().totals().total <= 0.0 {
+            self.notify(String::from("Total must be greater than zero."));
             return;
         }
 
