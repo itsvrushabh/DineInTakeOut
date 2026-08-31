@@ -13,7 +13,11 @@ use crate::models::{BillSummary, Order, Service};
 pub const BILLS_DIR: &str = "bills";
 
 pub fn money(value: f64) -> String {
-    format!("₹{value:.2}")
+    if value < 0.0 {
+        format!("-₹{:.2}", value.abs())
+    } else {
+        format!("₹{value:.2}")
+    }
 }
 
 pub fn render_receipt(order: &Order, customer_mobile: Option<&str>, gst_number: &str) -> String {
@@ -170,6 +174,7 @@ fn parse_summary(path: &Path) -> Option<BillSummary> {
     };
     let total_line = receipt
         .lines()
+        .rev()
         .find(|line| line.trim_start().starts_with("TOTAL"))?;
     let total = total_line.split('₹').nth(1)?.trim().parse().ok()?;
     Some(BillSummary {
@@ -184,4 +189,52 @@ fn parse_summary(path: &Path) -> Option<BillSummary> {
 fn center(text: &str, width: usize) -> String {
     let padding = width.saturating_sub(text.chars().count()) / 2;
     format!("{}{}", " ".repeat(padding), text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{CartLine, Order, OrderStatus};
+
+    #[test]
+    fn money_formatting_positive_and_negative() {
+        assert_eq!(money(25.5), "₹25.50");
+        assert_eq!(money(0.0), "₹0.00");
+        assert_eq!(money(-15.0), "-₹15.00");
+    }
+
+    #[test]
+    fn parse_summary_from_rendered_receipt() {
+        let order = Order {
+            id: 42,
+            label: "Main-T2".to_string(),
+            service: Service::DineIn,
+            table_number: Some(2),
+            area: Some("Main Hall".to_string()),
+            is_ac: false,
+            ac_rate: 0.0,
+            discount_percent: 10.0,
+            cart: vec![CartLine {
+                name: "TOTAL SPECIAL THALI".to_string(),
+                unit_price: 200.0,
+                qty: 1,
+            }],
+            cart_index: 0,
+            status: OrderStatus::Paid,
+        };
+
+        let receipt_text = render_receipt(&order, Some("9876543210"), "27AAPFU0939F1ZV");
+        let dir = std::env::temp_dir().join(format!("test_receipt_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bill_42_test.txt");
+        std::fs::write(&path, &receipt_text).unwrap();
+
+        let summary = parse_summary(&path).expect("parse receipt summary");
+        assert_eq!(summary.id, 42);
+        assert_eq!(summary.label, "Main-T2");
+        assert_eq!(summary.service, Service::DineIn);
+        assert_eq!(summary.total, 180.0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
