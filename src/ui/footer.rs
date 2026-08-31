@@ -11,6 +11,6 @@ use ratatui::{
 use crate::app::App;
 
 pub fn render_footer(f: &mut Frame, _app: &App, area: Rect) {
-    let help = vec![Line::from(" Press ? for help ")];
+    let help = vec![Line::from(" [?] Help · Tab: focus · /: search · p: bill · q: quit ")];
     f.render_widget(Paragraph::new(help).style(Style::default().dim()), area);
 }

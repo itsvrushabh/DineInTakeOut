@@ -225,13 +225,23 @@ pub fn render_help(f: &mut Frame, _app: &App) {
         .borders(Borders::ALL)
         .title(" Key Bindings (?) ");
     let text = vec![
-        Line::from("Tab/Shift+Tab: focus"),
-        Line::from("↑↓/j/k: select"),
-        Line::from("/: search · Enter/Space: add"),
-        Line::from("Delete/x: remove · +/- qty"),
-        Line::from("c: cancel/close"),
-        Line::from("p: bill · q: quit"),
+        Line::from("Tab/Shift+Tab: Focus between panels"),
+        Line::from("↑↓/j/k: Select item/area/bill"),
+        Line::from("←→/h/l: Select table in area"),
+        Line::from("1-9: Jump to table area"),
+        Line::from("/: Focus menu search"),
+        Line::from("Enter: Add item / Open table / Pay"),
+        Line::from("Delete/x: Remove cart item"),
+        Line::from("=/-: Adjust item quantity"),
+        Line::from("p/b: Generate and save bill"),
+        Line::from("t: Open take-out order"),
+        Line::from("s: Advance order stage"),
+        Line::from("c: Cancel/Close order"),
+        Line::from("r: Mark cleaning table as Ready"),
+        Line::from("e/i: Export/Import config (Menu/Area/Offers)"),
+        Line::from("q/Esc: Quit/Close popups"),
+        Line::from("?: Toggle help"),
     ];
-    let p = Paragraph::new(text).block(block).alignment(Alignment::Center);
+    let p = Paragraph::new(text).block(block).alignment(Alignment::Left);
     f.render_widget(p, area);
 }
