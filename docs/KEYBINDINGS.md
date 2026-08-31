@@ -1,7 +1,7 @@
 # Keybindings
 
 | Key | Action |
-| --- | --- |
+| `?` | Show this keybinding help |
 | `Tab` / `Shift+Tab` | Move focus between panels |
 | `↑` / `↓` or `j` / `k` | Select a menu item, cart item, area, or saved bill |
 | `←` / `→` or `h` / `l` | Select a table in the active area |

@@ -36,7 +36,7 @@ import.
 | `TableCount` | Number of physical tables in the area (integer, minimum 1)    |
 
 AC areas add the surcharge (see `config.csv`) plus 5 % GST; non-AC dine-in
-areas add 5 % GST only.
+areas have no tax (0 % GST). Take-out orders include 8 % GST.
 
 ## `offers.csv`
 

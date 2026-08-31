@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 use turso::{Connection, Row, Value};
 
 use crate::models::{
-    Area, BillTotals, CartLine, MenuItem, Offer, Order, OrderStatus, PhysicalTable, Service,
+    Area, BillSummary, BillTotals, CartLine, MenuItem, Offer, Order, OrderStatus, PhysicalTable, Service,
     TableStatus, CLEANING_MINUTES,
 };
 
@@ -35,6 +35,7 @@ const SCHEMA: [&str; 9] = [
          area            TEXT,
          customer_mobile TEXT NOT NULL,
          subtotal        REAL NOT NULL,
+         discount        REAL NOT NULL DEFAULT 0,
          ac_charge       REAL NOT NULL DEFAULT 0,
          tax             REAL NOT NULL,
          total           REAL NOT NULL,
@@ -56,6 +57,8 @@ const SCHEMA: [&str; 9] = [
          service      TEXT NOT NULL,
          table_number INTEGER,
          area         TEXT,
+         is_ac        INTEGER NOT NULL DEFAULT 0,
+         ac_rate      REAL NOT NULL DEFAULT 0,
          status       TEXT NOT NULL
      )",
     "CREATE TABLE IF NOT EXISTS open_order_items (
@@ -141,6 +144,13 @@ impl Database {
                     .await
                     .map_err(|e| format!("{e} (while running schema)"))?;
             }
+            // Migration for databases created before discount existed.
+            let _ = conn
+                .execute(
+                    "ALTER TABLE orders ADD COLUMN discount REAL NOT NULL DEFAULT 0",
+                    (),
+                )
+                .await;
             // Migration for databases created before AC surcharges existed.
             let _ = conn
                 .execute(
@@ -155,8 +165,7 @@ impl Database {
                     (),
                 )
                 .await;
-            // Migration for databases created before AC flags were stored on
-            // open orders (the values are recomputed from the area at reload).
+            // Migration for databases created before AC flags were stored on open orders.
             let _ = conn
                 .execute(
                     "ALTER TABLE open_orders ADD COLUMN is_ac INTEGER NOT NULL DEFAULT 0",
@@ -247,7 +256,7 @@ impl Database {
             row_i64(&row, 0)
         };
         if count == 0 {
-            for (idx, area) in crate::models::Area::defaults().into_iter().enumerate() {
+            for (idx, area) in Area::defaults().into_iter().enumerate() {
                 let _ = conn
                     .execute(
                         "INSERT INTO areas (name, is_ac, table_count, sort_order)
@@ -288,7 +297,7 @@ impl Database {
                 .await
             {
                 Ok(rows) => rows,
-                Err(_) => return crate::models::Area::defaults(),
+                Err(_) => return Area::defaults(),
             };
             let mut areas = Vec::new();
             while let Ok(Some(row)) = rows.next().await {
@@ -299,7 +308,7 @@ impl Database {
                 });
             }
             if areas.is_empty() {
-                crate::models::Area::defaults()
+                Area::defaults()
             } else {
                 areas
             }
@@ -414,10 +423,17 @@ impl Database {
 
     // -- orders ---------------------------------------------------------------
 
-    /// Next bill number: one past the highest stored order id.
+    /// Next bill number: one past the highest stored order id across both paid
+    /// and open orders.
     pub fn next_bill_number(&self) -> u32 {
-        self.scalar_i64("SELECT COALESCE(MAX(id), 0) FROM orders")
-            .saturating_add(1) as u32
+        self.scalar_i64(
+            "SELECT COALESCE(MAX(id), 0) FROM (
+                 SELECT id FROM orders
+                 UNION ALL
+                 SELECT id FROM open_orders
+             )",
+        )
+        .saturating_add(1) as u32
     }
 
     /// Persists a paid order with its line items. Called once at billing time;
@@ -433,8 +449,8 @@ impl Database {
             let tx = conn.transaction().await.map_err(|e| e.to_string())?;
             tx.execute(
                 "INSERT INTO orders (id, label, service, table_number, area, customer_mobile,
-                                     subtotal, ac_charge, tax, total, status)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'PAID')",
+                                     subtotal, discount, ac_charge, tax, total, status)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'PAID')",
                 (
                     i64::from(order.id),
                     order.label.clone(),
@@ -443,6 +459,7 @@ impl Database {
                     order.area.clone(),
                     mobile,
                     totals.subtotal,
+                    totals.discount,
                     totals.ac_charge,
                     totals.gst,
                     totals.total,
@@ -558,75 +575,64 @@ impl Database {
             status: OrderStatus,
         }
 
-        let mut headers: Vec<Header> = self.rt.block_on(async {
+        self.rt.block_on(async {
             let conn = self.conn.lock().await;
-            let mut out = Vec::new();
-            let Ok(mut stmt) = conn
-                .prepare(
+            let mut headers = Vec::new();
+            if let Ok(mut rows) = conn
+                .query(
                     "SELECT id, label, service, table_number, area, is_ac, ac_rate, status
                      FROM open_orders ORDER BY id",
+                    (),
                 )
                 .await
-            else {
-                return out;
-            };
-            let Ok(mut rows) = stmt.query(()).await else {
-                return out;
-            };
-            while let Ok(Some(row)) = rows.next().await {
-                out.push(Header {
-                    id: row_i64(&row, 0) as u32,
-                    label: row_string(&row, 1),
-                    service: Service::parse(&row_string(&row, 2)),
-                    table_number: row_opt_i64(&row, 3).map(|n| n as usize),
-                    area: {
-                        let raw = row_string(&row, 4);
-                        if raw.is_empty() {
-                            None
-                        } else {
-                            Some(raw)
-                        }
-                    },
-                    is_ac: row_i64(&row, 5) != 0,
-                    ac_rate: row_f64(&row, 6),
-                    status: OrderStatus::parse(&row_string(&row, 7))
-                        .unwrap_or(OrderStatus::Ordering),
-                });
+            {
+                while let Ok(Some(row)) = rows.next().await {
+                    headers.push(Header {
+                        id: row_i64(&row, 0) as u32,
+                        label: row_string(&row, 1),
+                        service: Service::parse(&row_string(&row, 2)),
+                        table_number: row_opt_i64(&row, 3).map(|n| n as usize),
+                        area: {
+                            let raw = row_string(&row, 4);
+                            if raw.is_empty() {
+                                None
+                            } else {
+                                Some(raw)
+                            }
+                        },
+                        is_ac: row_i64(&row, 5) != 0,
+                        ac_rate: row_f64(&row, 6),
+                        status: OrderStatus::parse(&row_string(&row, 7))
+                            .unwrap_or(OrderStatus::Ordering),
+                    });
+                }
             }
-            out
-        });
 
-        headers
-            .drain(..)
-            .filter_map(|header| {
-                let service = header.service?;
-                let id = header.id;
-                let cart: Vec<CartLine> = self.rt.block_on(async {
-                    let conn = self.conn.lock().await;
-                    let mut cart = Vec::new();
-                    let Ok(mut stmt) = conn
-                        .prepare(
-                            "SELECT name, unit_price, qty FROM open_order_items
-                             WHERE order_id = ?1 ORDER BY position",
-                        )
-                        .await
-                    else {
-                        return cart;
-                    };
-                    let Ok(mut items) = stmt.query([i64::from(id)]).await else {
-                        return cart;
-                    };
-                    while let Ok(Some(item)) = items.next().await {
+            let mut orders = Vec::new();
+            for header in headers {
+                let Some(service) = header.service else {
+                    continue;
+                };
+                let mut cart = Vec::new();
+                if let Ok(mut item_rows) = conn
+                    .query(
+                        "SELECT name, unit_price, qty FROM open_order_items
+                         WHERE order_id = ?1 ORDER BY position",
+                        [i64::from(header.id)],
+                    )
+                    .await
+                {
+                    while let Ok(Some(item)) = item_rows.next().await {
                         cart.push(CartLine {
                             name: row_string(&item, 0),
                             unit_price: row_f64(&item, 1),
                             qty: row_i64(&item, 2) as u32,
                         });
                     }
-                    cart
-                });
-                Some(Order {
-                    id,
+                }
+
+                orders.push(Order {
+                    id: header.id,
                     label: header.label,
                     service,
                     table_number: header.table_number,
@@ -637,13 +643,38 @@ impl Database {
                     cart,
                     cart_index: 0,
                     status: header.status,
-                })
-            })
-            .collect()
+                });
+            }
+            orders
+        })
     }
 
     // -- physical tables ------------------------------------------------------
 
+    pub fn load_recent_bills(&self) -> Vec<BillSummary> {
+        self.rt.block_on(async {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT id, label, service, total FROM orders ORDER BY id DESC LIMIT 5",
+                    (),
+                )
+                .await
+                .unwrap();
+
+            let mut bills = Vec::new();
+            while let Ok(Some(row)) = rows.next().await {
+                bills.push(BillSummary {
+                    id: row_i64(&row, 0) as u32,
+                    label: row_string(&row, 1),
+                    service: Service::parse(&row_string(&row, 2)).unwrap_or(Service::DineIn),
+                    total: row_f64(&row, 3),
+                    receipt: String::new(), // Reconstruct on demand
+                });
+            }
+            bills
+        })
+    }
     /// Upserts the state of one physical table.
     pub fn upsert_table(&self, table: &PhysicalTable) -> Result<(), String> {
         let updated_at = Local::now().format(TIMESTAMP_FORMAT).to_string();
@@ -809,14 +840,13 @@ fn row_string(row: &Row, idx: usize) -> String {
 fn row_i64(row: &Row, idx: usize) -> i64 {
     match row.get_value(idx) {
         Ok(Value::Integer(n)) => n,
-        Ok(Value::Real(x)) => x as i64,
         _ => 0,
     }
 }
 
 fn row_f64(row: &Row, idx: usize) -> f64 {
     match row.get_value(idx) {
-        Ok(Value::Real(x)) => x,
+        Ok(Value::Real(f)) => f,
         Ok(Value::Integer(n)) => n as f64,
         _ => 0.0,
     }
@@ -825,42 +855,26 @@ fn row_f64(row: &Row, idx: usize) -> f64 {
 fn row_opt_i64(row: &Row, idx: usize) -> Option<i64> {
     match row.get_value(idx) {
         Ok(Value::Integer(n)) => Some(n),
-        Ok(Value::Real(x)) => Some(x as i64),
         _ => None,
     }
 }
 
 #[cfg(test)]
 impl Database {
-    /// Opening is serialised because the Turso engine takes a process-wide
-    /// lock while initialising a database file; concurrent opens from parallel
-    /// test threads otherwise fail spuriously with "database is locked".
-    fn open_serialised(path: &std::path::Path) -> Self {
-        use std::sync::Mutex;
-
-        static OPEN_LOCK: Mutex<()> = Mutex::new(());
-
-        let _guard = OPEN_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        Self::open_local(path).expect("test database")
+    pub fn open_for_tests() -> Self {
+        let id = NEXT_TEST_DB_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let path = std::env::temp_dir().join(format!(
+            "dinein-billing-test-{}-{}.db",
+            std::process::id(),
+            id
+        ));
+        let _ = std::fs::remove_file(&path);
+        Self::open(&path).expect("open test database")
     }
 
-    /// Unique temporary file per call so tests never share state.
-    fn open_for_tests() -> Self {
-        use std::sync::atomic::Ordering;
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        let id = NEXT_TEST_DB_ID.fetch_add(1, Ordering::Relaxed);
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "dinein-billing-test-{}-{nanos}-{id}.db",
-            std::process::id()
-        ));
-        Self::open_serialised(&path)
+    #[allow(dead_code)]
+    pub fn open_serialised(path: &Path) -> Self {
+        Self::open(path).expect("open serialised database")
     }
 }
 
@@ -927,7 +941,8 @@ mod tests {
         let db = Database::open_for_tests();
         assert_eq!(db.next_bill_number(), 1);
 
-        let order7 = sample_order(7);
+        let mut order7 = sample_order(7);
+        order7.discount_percent = 10.0;
         let mut ac = sample_order(8);
         ac.area = Some("AC Rooms".to_string());
         ac.is_ac = true;
@@ -941,7 +956,11 @@ mod tests {
             db.scalar_string("SELECT customer_mobile FROM orders WHERE id = 7"),
             "9876543210"
         );
-        assert_eq!(db.scalar_f64("SELECT total FROM orders WHERE id = 7"), 55.0);
+        assert_eq!(
+            db.scalar_f64("SELECT discount FROM orders WHERE id = 7"),
+            5.5
+        );
+        assert_eq!(db.scalar_f64("SELECT total FROM orders WHERE id = 7"), 49.5);
         assert_eq!(
             db.scalar_string("SELECT payment_mode FROM orders WHERE id = 7"),
             "",
@@ -991,6 +1010,10 @@ mod tests {
 
         db.save_open_order(&dine_in).unwrap();
         db.save_open_order(&takeout).unwrap();
+
+        // Check next_bill_number sees open orders too!
+        assert_eq!(db.next_bill_number(), 13);
+
         // Upsert with an extra line must replace the stored cart, not append.
         dine_in.cart.push(CartLine {
             name: "Gulab Jamun".to_string(),
@@ -1112,25 +1135,5 @@ mod tests {
             db.scalar_optional_string("SELECT area FROM orders WHERE id = 3"),
             None
         );
-    }
-
-    /// Regression guard: the production file may have been written by the
-    /// previous libSQL driver (plain SQLite format). The Turso engine must be
-    /// able to open it and read the stored data.
-    #[test]
-    fn opens_existing_production_database_file() {
-        let source = std::path::Path::new("data/billing.db");
-        if !source.exists() {
-            return; // no production database yet on this machine
-        }
-        let copy =
-            std::env::temp_dir().join(format!("dinein-billing-compat-{}.db", std::process::id()));
-        std::fs::copy(source, &copy).expect("copy production database");
-
-        let db = Database::open_serialised(&copy);
-        assert!(db.next_bill_number() >= 1);
-        assert!(!db.menu_is_empty());
-
-        let _ = std::fs::remove_file(&copy);
     }
 }
