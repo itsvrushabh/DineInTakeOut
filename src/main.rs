@@ -8,18 +8,19 @@ mod db;
 mod models;
 mod receipts;
 mod ui;
+mod whatsapp;
 
 use app::App;
 use ui::ui;
 
-fn main() -> io::Result<()> {
+#[tokio::main]
+async fn main() -> io::Result<()> {
     let mut terminal = ratatui::init();
-    let result = run(&mut terminal);
+    let result = run(&mut terminal).await;
     ratatui::restore();
     result
 }
-
-fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
+async fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
     let mut app = App::new();
     loop {
         app.tick_notification();
@@ -39,3 +40,4 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
         }
     }
 }
+
