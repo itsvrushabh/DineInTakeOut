@@ -51,6 +51,7 @@ pub struct App {
     pub offer_index: usize,         // selection inside the offer-selection popup
     pub pending_mobile: String,     // customer mobile captured before offer pick
     pub show_help: bool,
+    pub table_input: String,
 
 }
 
@@ -187,6 +188,7 @@ impl App {
             offer_index: 0,
             pending_mobile: String::new(),
             show_help: false,
+            table_input: String::new(),
         }
     }
     pub fn order_mut(&mut self) -> &mut Order {
@@ -886,6 +888,7 @@ impl App {
                 KeyCode::Char('r') => {
                     self.clean_selected_table();
                 }
+                KeyCode::Char('g') => self.focus = Focus::TableJump,
                 KeyCode::Char('b') | KeyCode::Char('p') => self.begin_billing(),
                 KeyCode::BackTab => self.focus = Focus::Cart,
                 KeyCode::Tab => self.focus = Focus::RecentBills,
@@ -986,6 +989,7 @@ impl App {
                             self.apply_offer_and_bill(idx);
                         }
                     }
+
                     KeyCode::Enter => self.apply_offer_and_bill(self.offer_index),
                     KeyCode::Esc => {
                         self.pending_mobile.clear();
@@ -994,6 +998,27 @@ impl App {
                     _ => {}
                 }
             }
+            Focus::TableJump => match key {
+                KeyCode::Char(c) if c.is_ascii_digit() => {
+                    self.table_input.push(c);
+                }
+                KeyCode::Backspace => {
+                    self.table_input.pop();
+                }
+                KeyCode::Enter => {
+                    if let Ok(id) = self.table_input.parse::<usize>() {
+                        // Find table by ID and update selected
+                        self.notify(format!("Jumped to table {id}"));
+                        self.table_input.clear();
+                    }
+                    self.focus = Focus::Tables;
+                }
+                KeyCode::Esc => {
+                    self.table_input.clear();
+                    self.focus = Focus::Tables;
+                }
+                _ => {}
+            },
         }
         false
     }

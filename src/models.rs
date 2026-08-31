@@ -132,6 +132,7 @@ pub enum Focus {
     PaymentMode,
     /// Modal selection of a discount offer to apply at billing.
     OfferSelect,
+    TableJump,
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]

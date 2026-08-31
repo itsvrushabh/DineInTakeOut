@@ -11,6 +11,7 @@ pub mod search;
 
 use ratatui::{
     layout::{Constraint, Flex, Layout, Rect},
+    widgets::{Block, Borders, Paragraph},
     Frame,
 };
 
@@ -32,28 +33,30 @@ use crate::{
 pub fn ui(f: &mut Frame, app: &App) {
     let compact = f.area().height < 33;
     let tabs_height = (app.areas.len() + 4).clamp(7, 16) as u16;
-    let [tabs_area, search_area, body, notification_area, recent_bills_area, footer_area] =
-        Layout::vertical(if compact {
-            [
-                Constraint::Length(tabs_height),
-                Constraint::Length(3),
-                Constraint::Min(6),
-                Constraint::Length(2),
-                Constraint::Length(0),
-                Constraint::Length(2),
-            ]
-        } else {
-            [
-                Constraint::Length(tabs_height),
-                Constraint::Length(3),
-                Constraint::Fill(1),
-                Constraint::Length(3),
-                Constraint::Length(7),
-                Constraint::Length(4),
-            ]
-        })
+    let [top_row, search_area, body, recent_bills_area, footer_area, notification_area] =
+        Layout::vertical([
+            Constraint::Length(tabs_height),
+            Constraint::Length(3),
+            Constraint::Fill(1),
+            Constraint::Length(7),
+            Constraint::Length(1), // minimal footer
+            Constraint::Length(4), // bottom notification
+        ])
         .areas(f.area());
 
+    let [tabs_area, _table_input_area] =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(30)])
+        .areas(top_row);
+    
+    f.render_widget(Block::default().borders(Borders::ALL).title(" Table Jump "), _table_input_area);
+
+    if app.focus == Focus::TableJump {
+        f.render_widget(
+            Paragraph::new(format!("Table ID: {}", app.table_input))
+                .block(Block::default().borders(Borders::ALL).title(" Jump To ")),
+            _table_input_area,
+        );
+    }
     let [menu_area, cart_area] =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(body);
 

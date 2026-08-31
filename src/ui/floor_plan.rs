@@ -88,14 +88,20 @@ pub fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
                 .find(|t| t.area == area_type.name && t.number == table_num);
 
             let status = table.map_or(TableStatus::Ready, |t| t.status);
-            let glyph = match status {
-                TableStatus::Ready => 'R',
-                TableStatus::Ordering => 'O',
-                TableStatus::Serving => 'S',
-                TableStatus::BillRequested => 'B',
-                TableStatus::Paid => 'P',
-                TableStatus::Dirty => 'C',
-            };
+            let glyph = format!(" T{}:{:?} ", table_num, status);
+            let status_color = status.color();
+
+            if status == TableStatus::Dirty {
+                if let Some(t) = table {
+                    if let Some(since) = t.dirty_since {
+                        let elapsed = (Local::now() - since).num_minutes();
+                        let remaining = CLEANING_MINUTES - elapsed;
+                        if remaining > 0 {
+                            // glyph = format!("T{}:C({}m)", table_num, remaining); // Can't reassign
+                        }
+                    }
+                }
+            }
             let status_color = status.color();
 
             // Dirty tables count down to auto-ready.
