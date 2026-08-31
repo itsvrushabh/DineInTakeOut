@@ -22,7 +22,7 @@ pub fn render_recent_bills(f: &mut Frame, app: &App, area: Rect) {
             .add_modifier(Modifier::BOLD)
     };
 
-    let title = Span::styled(" Recent bills (latest 5) — ↑/↓: review ", title_style);
+    let title = Span::styled(" Recent bills (latest 5) ", title_style);
 
     if app.recent_bills.is_empty() {
         lines.push(Line::styled(

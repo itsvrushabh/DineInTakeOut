@@ -33,7 +33,7 @@ pub fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(Span::styled(
-            " Floor plan — ↑↓: area · ←→: table · 1–9: jump · Enter: open/switch/clean · s: next stage ",
+            " Floor plan ",
             title_style,
         ))
         .border_style(border_style);

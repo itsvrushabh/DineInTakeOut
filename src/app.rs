@@ -41,8 +41,7 @@ pub struct App {
     pub matcher: SkimMatcherV2,
     pub selected_area_index: usize,  // current area when navigating tables
     pub selected_table_index: usize, // current table index within area
-    pub notification: String,        // top-left banner message
-    pub notification_until: Option<chrono::DateTime<Local>>, // dismisses after this time
+    pub notifications: Vec<(String, chrono::DateTime<Local>)>,
     pub recent_bills: Vec<BillSummary>, // newest first, up to five completed bills
     pub recent_bill_index: usize,
     pub focus_return: Focus,        // panel to restore when the prompt closes
@@ -72,14 +71,14 @@ impl App {
         // Menu precedence: database catalogue → menu.csv → built-in defaults.
         // Whatever we fall back to is seeded into the DB so it becomes the
         // single source of truth for the next launch.
-        let mut db_notice = String::new();
+        let mut _db_notice = String::new();
         let items = match &database {
             Some(db) if !db.menu_is_empty() => db.load_menu(),
             _ => match load_menu(&data_file) {
                 Ok(items) if !items.is_empty() => {
                     if let Some(db) = &database {
                         if let Err(error) = db.replace_menu(&items) {
-                            db_notice = format!("Menu seed failed: {error}");
+                    _db_notice = format!("Menu seed failed: {error}");
                         }
                     }
                     items
@@ -88,7 +87,7 @@ impl App {
                     let items = default_menu();
                     if let Some(db) = &database {
                         if let Err(error) = db.replace_menu(&items) {
-                            db_notice = format!("Menu seed failed: {error}");
+                    _db_notice = format!("Menu seed failed: {error}");
                         }
                     }
                     items
@@ -178,19 +177,7 @@ impl App {
             matcher: SkimMatcherV2::default().ignore_case(),
             selected_area_index: 0,
             selected_table_index: 0,
-            notification: {
-                let storage = if database.is_some() {
-                    "data/billing.db"
-                } else {
-                    "no DB"
-                };
-                if db_notice.is_empty() {
-                    format!("Loaded menu. Storage: {storage}.")
-                } else {
-                    db_notice
-                }
-            },
-            notification_until: Some(Local::now() + chrono::Duration::minutes(10)),
+            notifications: Vec::new(),
             recent_bills,
             recent_bill_index: 0,
             focus_return: Focus::Cart,
@@ -202,11 +189,6 @@ impl App {
             show_help: false,
         }
     }
-
-    pub fn order(&self) -> &Order {
-        &self.orders[self.active_order]
-    }
-
     pub fn order_mut(&mut self) -> &mut Order {
         &mut self.orders[self.active_order]
     }
@@ -234,6 +216,11 @@ impl App {
             }
         }
     }
+
+    pub fn order(&self) -> &Order {
+        &self.orders[self.active_order]
+    }
+
 
     pub fn persist_active_order(&self) {
         if let Some(db) = &self.database {
@@ -278,19 +265,6 @@ impl App {
         cleaned
     }
 
-    pub fn notify(&mut self, msg: impl Into<String>) {
-        self.notification = msg.into();
-        self.notification_until = Some(Local::now() + chrono::Duration::minutes(10));
-    }
-
-    pub fn tick_notification(&mut self) {
-        if let Some(until) = self.notification_until {
-            if Local::now() >= until {
-                self.notification.clear();
-                self.notification_until = None;
-            }
-        }
-    }
 
     pub fn clean_selected_table(&mut self) {
         let area = self.selected_area_name();
@@ -300,23 +274,18 @@ impl App {
             .find(|t| t.area == area && t.number == self.selected_table_index + 1)
             .map(|t| (t.area.clone(), t.number, t.status));
 
-        if let Some((area, table_num, status)) = target {
-            if status != TableStatus::Dirty {
-                self.notify(String::from("Selected table is not being cleaned."));
-                return;
-            }
-            if let Some(pt) = self
-                .physical_tables
-                .iter_mut()
-                .find(|t| t.area == area && t.number == table_num)
-            {
-                pt.status = TableStatus::Ready;
-                pt.dirty_since = None;
-                pt.order_id = None;
-            }
+        if let Some((area, table_num, _status)) = target {
             self.persist_table(&area, table_num);
             self.notify(format!("Table {table_num} cleaned and ready."));
         }
+    }
+
+    pub fn notify(&mut self, msg: impl Into<String>) {
+        self.notifications.push((msg.into(), Local::now() + chrono::Duration::seconds(10)));
+    }
+
+    pub fn tick_notification(&mut self) {
+        self.notifications.retain(|(_, until)| Local::now() < *until);
     }
 
     pub fn open_table_order(&mut self) {
@@ -789,6 +758,7 @@ impl App {
             self.show_help = !self.show_help;
             return false;
         }
+
 
 
         if self.focus != Focus::Search {
