@@ -72,7 +72,7 @@ pub fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
         let ac_tag = if area_type.is_ac { " (AC)" } else { "" };
         let mut spans = vec![
             Span::styled(
-                format!(" {:<16}{}", area_type.name, ac_tag),
+                format!(" {} {}", area_type.name, ac_tag),
                 Style::default().fg(label_fg).add_modifier(label_mod),
             ),
             Span::styled(
@@ -88,8 +88,7 @@ pub fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
                 .find(|t| t.area == area_type.name && t.number == table_num);
 
             let status = table.map_or(TableStatus::Ready, |t| t.status);
-            let glyph = format!(" T{}:{:?} ", table_num, status);
-            let status_color = status.color();
+            let glyph = format!(" T{}:{:?}", table_num, status);
 
             if status == TableStatus::Dirty {
                 if let Some(t) = table {
@@ -119,8 +118,8 @@ pub fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
             let is_selected = is_focused_bar && app.selected_table_index == table_num - 1;
 
             let cell_text = match &countdown {
-                Some(mins) => format!("{glyph}{table_num}{mins}"),
-                None => format!("{glyph}{table_num}"),
+                Some(mins) => format!("{glyph}{mins}"),
+                None => format!("{glyph}"),
             };
             spans.push(Span::raw(" "));
             spans.push(Span::styled(
