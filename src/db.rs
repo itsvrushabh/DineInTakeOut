@@ -14,8 +14,8 @@ use tokio::sync::Mutex;
 use turso::{Connection, Row, Value};
 
 use crate::models::{
-    Area, BillSummary, BillTotals, CartLine, MenuItem, Offer, Order, OrderStatus, PhysicalTable, Service,
-    TableStatus, CLEANING_MINUTES,
+    Area, BillSummary, BillTotals, CartLine, MenuItem, Offer, Order, OrderStatus, PhysicalTable,
+    Service, TableStatus, CLEANING_MINUTES,
 };
 
 const TIMESTAMP_FORMAT: &str = "%Y-%m-%d %H:%M:%S";

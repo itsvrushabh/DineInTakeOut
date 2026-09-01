@@ -1,8 +1,6 @@
 //! Application state management, user actions, and event routing.
 
-use std::{
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use chrono::Local;
 use crossterm::event::KeyCode;
@@ -18,7 +16,7 @@ use crate::{
         Area, BillSummary, CartLine, Focus, MenuItem, Offer, Order, OrderStatus, PaymentMode,
         PhysicalTable, Service, TableStatus, CLEANING_MINUTES,
     },
-    receipts::{render_receipt},
+    receipts::render_receipt,
 };
 
 pub const DB_PATH: &str = "data/billing.db";
@@ -39,7 +37,7 @@ pub struct App {
     pub focus: Focus,
     pub data_file: PathBuf,
     pub matcher: SkimMatcherV2,
-    pub selected_area_index: usize,  // current area when navigating tables
+    pub selected_area_index: usize, // current area when navigating tables
     pub selected_table_index: usize, // current table index within area
     pub notifications: Vec<(String, chrono::DateTime<Local>)>,
     pub recent_bills: Vec<BillSummary>, // newest first, up to five completed bills
@@ -51,7 +49,6 @@ pub struct App {
     pub offer_index: usize,         // selection inside the offer-selection popup
     pub pending_mobile: String,     // customer mobile captured before offer pick
     pub show_help: bool,
-
 }
 
 impl App {
@@ -78,7 +75,7 @@ impl App {
                 Ok(items) if !items.is_empty() => {
                     if let Some(db) = &database {
                         if let Err(error) = db.replace_menu(&items) {
-                    _db_notice = format!("Menu seed failed: {error}");
+                            _db_notice = format!("Menu seed failed: {error}");
                         }
                     }
                     items
@@ -87,7 +84,7 @@ impl App {
                     let items = default_menu();
                     if let Some(db) = &database {
                         if let Err(error) = db.replace_menu(&items) {
-                    _db_notice = format!("Menu seed failed: {error}");
+                            _db_notice = format!("Menu seed failed: {error}");
                         }
                     }
                     items
@@ -144,11 +141,7 @@ impl App {
             }
             None => {
                 let _recent_bills: Vec<BillSummary> = Vec::new();
-                (
-                    Vec::new(),
-                    1,
-                    init_physical_tables(&areas),
-                )
+                (Vec::new(), 1, init_physical_tables(&areas))
             }
         };
 
@@ -221,7 +214,6 @@ impl App {
         &self.orders[self.active_order]
     }
 
-
     pub fn persist_active_order(&self) {
         if let Some(db) = &self.database {
             if let Some(order) = self.orders.get(self.active_order) {
@@ -265,7 +257,6 @@ impl App {
         cleaned
     }
 
-
     pub fn clean_selected_table(&mut self) {
         let area = self.selected_area_name();
         let target = self
@@ -281,11 +272,13 @@ impl App {
     }
 
     pub fn notify(&mut self, msg: impl Into<String>) {
-        self.notifications.push((msg.into(), Local::now() + chrono::Duration::seconds(10)));
+        self.notifications
+            .push((msg.into(), Local::now() + chrono::Duration::seconds(10)));
     }
 
     pub fn tick_notification(&mut self) {
-        self.notifications.retain(|(_, until)| Local::now() < *until);
+        self.notifications
+            .retain(|(_, until)| Local::now() < *until);
     }
 
     pub fn open_table_order(&mut self) {
@@ -389,14 +382,16 @@ impl App {
 
     pub fn cancel_order(&mut self) {
         let order = self.order();
-        let table_info = order.table_number.and_then(|num| order.area.as_ref().map(|area| (num, area.clone())));
+        let table_info = order
+            .table_number
+            .and_then(|num| order.area.as_ref().map(|area| (num, area.clone())));
         let closed_id = order.id;
 
         self.orders.remove(self.active_order);
         if self.active_order >= self.orders.len() && !self.orders.is_empty() {
             self.active_order = self.orders.len() - 1;
         }
-        
+
         if let Some(db) = &self.database {
             let _ = db.delete_open_order(closed_id);
         }
@@ -429,7 +424,9 @@ impl App {
         } else if order.cart.is_empty() {
             self.cancel_order();
         } else {
-            self.notify(String::from("Cannot close order with items. Generate bill first."));
+            self.notify(String::from(
+                "Cannot close order with items. Generate bill first.",
+            ));
         }
     }
     pub fn perform_close_with_mode(&mut self, mode: PaymentMode) {
@@ -439,7 +436,9 @@ impl App {
 
         let order = self.order();
         let label = order.label.clone();
-        let table_info = order.table_number.and_then(|num| order.area.as_ref().map(|area| (num, area.clone())));
+        let table_info = order
+            .table_number
+            .and_then(|num| order.area.as_ref().map(|area| (num, area.clone())));
         let closed_id = order.id;
 
         if let Some(db) = &self.database {
@@ -478,8 +477,6 @@ impl App {
 
         self.notify(format!("Closed {label} via {mode_display}."));
     }
-
-
 
     pub fn advance_stage(&mut self) {
         if self.orders.is_empty() {
@@ -587,7 +584,6 @@ impl App {
             return;
         }
 
-
         let message = {
             let order = self.order_mut();
             if order.cart_index >= order.cart.len() {
@@ -607,7 +603,6 @@ impl App {
 
         self.notify(message);
         self.persist_active_order();
-
     }
 
     pub fn clear_active_cart(&mut self) {
@@ -711,33 +706,31 @@ impl App {
             self.notify(format!("DB save failed: {error}"));
         }
 
-                
-                let summary = BillSummary {
-                    id: order_id,
-                    label: order_label.clone(),
-                    service: order_service,
-                    total: totals.total,
-                    receipt: bill_text.clone(),
-                };
-                self.recent_bills.insert(0, summary);
-                self.recent_bills.truncate(5);
-                self.recent_bill_index = 0;
-                self.notify(format!("Bill #{} saved to database.", order_id));
+        let summary = BillSummary {
+            id: order_id,
+            label: order_label.clone(),
+            service: order_service,
+            total: totals.total,
+            receipt: bill_text.clone(),
+        };
+        self.recent_bills.insert(0, summary);
+        self.recent_bills.truncate(5);
+        self.recent_bill_index = 0;
+        self.notify(format!("Bill #{} saved to database.", order_id));
 
+        self.order_mut().status = OrderStatus::Paid;
 
-                self.order_mut().status = OrderStatus::Paid;
-
-                if let Some((table_num, area)) = table_info {
-                    if let Some(pt) = self
-                        .physical_tables
-                        .iter_mut()
-                        .find(|t| t.area == area && t.number == table_num)
-                    {
-                        pt.status = TableStatus::Paid;
-                    }
-                    self.persist_table(&area, table_num);
-                }
-                self.focus = self.focus_return;
+        if let Some((table_num, area)) = table_info {
+            if let Some(pt) = self
+                .physical_tables
+                .iter_mut()
+                .find(|t| t.area == area && t.number == table_num)
+            {
+                pt.status = TableStatus::Paid;
+            }
+            self.persist_table(&area, table_num);
+        }
+        self.focus = self.focus_return;
     }
 
     pub fn handle_key(&mut self, key: KeyCode) -> bool {
@@ -756,8 +749,6 @@ impl App {
             self.show_help = !self.show_help;
             return false;
         }
-
-
 
         if self.focus != Focus::Search {
             if matches!(key, KeyCode::Char(']')) {
@@ -911,39 +902,37 @@ impl App {
                 KeyCode::BackTab => self.focus = Focus::Tables,
                 _ => {}
             },
-            Focus::MobileEntry => {
-                match key {
-                    KeyCode::Char(c) if c.is_ascii_digit() => {
-                        if self.mobile_buffer.len() < 10 {
-                            self.mobile_buffer.push(c);
-                        }
+            Focus::MobileEntry => match key {
+                KeyCode::Char(c) if c.is_ascii_digit() => {
+                    if self.mobile_buffer.len() < 10 {
+                        self.mobile_buffer.push(c);
                     }
-                    KeyCode::Backspace => {
-                        self.mobile_buffer.pop();
-                    }
-                    KeyCode::Enter => {
-                        if self.mobile_buffer.len() == 10 || self.mobile_buffer.is_empty() {
-                            let mobile = std::mem::take(&mut self.mobile_buffer);
-                            if self.offers.is_empty() {
-                                self.complete_billing(&mobile, None);
-                            } else {
-                                self.offer_index = 0;
-                                self.focus = Focus::OfferSelect;
-                                self.pending_mobile = mobile;
-                            }
+                }
+                KeyCode::Backspace => {
+                    self.mobile_buffer.pop();
+                }
+                KeyCode::Enter => {
+                    if self.mobile_buffer.len() == 10 || self.mobile_buffer.is_empty() {
+                        let mobile = std::mem::take(&mut self.mobile_buffer);
+                        if self.offers.is_empty() {
+                            self.complete_billing(&mobile, None);
                         } else {
-                            self.notify(format!(
+                            self.offer_index = 0;
+                            self.focus = Focus::OfferSelect;
+                            self.pending_mobile = mobile;
+                        }
+                    } else {
+                        self.notify(format!(
                                 "Mobile number needs 10 digits ({} so far, or press Enter on empty to skip).",
                                 self.mobile_buffer.len()
                             ));
-                        }
                     }
-                    KeyCode::Esc => {
-                        self.focus = self.focus_return;
-                    }
-                    _ => {}
                 }
-            }
+                KeyCode::Esc => {
+                    self.focus = self.focus_return;
+                }
+                _ => {}
+            },
             Focus::PaymentMode => match key {
                 KeyCode::Up | KeyCode::Char('k') => {
                     self.payment_mode_index = self.payment_mode_index.saturating_sub(1);

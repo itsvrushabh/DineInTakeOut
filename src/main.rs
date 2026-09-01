@@ -1,7 +1,4 @@
-use std::{
-    io,
-    time::Duration,
-};
+use std::{io, time::Duration};
 
 use crossterm::event::{self, Event, KeyEventKind};
 

@@ -18,7 +18,14 @@ pub fn render_notification(f: &mut Frame, app: &App, area: Rect) {
     let lines: Vec<Line> = app
         .notifications
         .iter()
-        .map(|(msg, _)| Line::styled(msg, Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)))
+        .map(|(msg, _)| {
+            Line::styled(
+                msg,
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )
+        })
         .collect();
 
     let block = Block::default()

@@ -135,11 +135,8 @@ pub fn render_bill(f: &mut Frame, app: &App, area: Rect) {
     let totals_height = total_lines.len() as u16;
 
     // Split inner area into table area and totals area to guarantee NO overlaps
-    let [table_area, totals_area] = Layout::vertical([
-        Constraint::Min(2),
-        Constraint::Length(totals_height),
-    ])
-    .areas(inner);
+    let [table_area, totals_area] =
+        Layout::vertical([Constraint::Min(2), Constraint::Length(totals_height)]).areas(inner);
 
     let rows: Vec<Row> = order
         .cart

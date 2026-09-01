@@ -1,10 +1,6 @@
 //! Configuration persistence, default menu data, and CSV import/export.
 
-use std::{
-    collections::HashMap,
-    io,
-    path::Path,
-};
+use std::{collections::HashMap, io, path::Path};
 
 use crate::models::{Area, MenuItem, Offer};
 
@@ -69,10 +65,20 @@ pub fn default_menu() -> Vec<MenuItem> {
             "Full plate",
             125.0,
         ),
-        ("Main Course (Veg)", "Paneer Butter Masala", "Full plate", 165.0),
+        (
+            "Main Course (Veg)",
+            "Paneer Butter Masala",
+            "Full plate",
+            165.0,
+        ),
         ("Main Course (Veg)", "Palak Paneer", "Full plate", 150.0),
         ("Main Course (Veg)", "Kadai Paneer", "Full plate", 160.0),
-        ("Main Course (Veg)", "Veg Biryani / Pulao", "Full plate", 130.0),
+        (
+            "Main Course (Veg)",
+            "Veg Biryani / Pulao",
+            "Full plate",
+            130.0,
+        ),
         (
             "Main Course (Veg)",
             "Special Veg Thali",
@@ -85,10 +91,30 @@ pub fn default_menu() -> Vec<MenuItem> {
             "Full plate",
             110.0,
         ),
-        ("Main Course (Non-Veg)", "Chicken Curry / Masala", "Full plate", 190.0),
-        ("Main Course (Non-Veg)", "Butter Chicken", "Full plate", 225.0),
-        ("Main Course (Non-Veg)", "Chicken Biryani", "Full plate", 175.0),
-        ("Main Course (Non-Veg)", "Mutton Curry / Biryani", "Full plate", 275.0),
+        (
+            "Main Course (Non-Veg)",
+            "Chicken Curry / Masala",
+            "Full plate",
+            190.0,
+        ),
+        (
+            "Main Course (Non-Veg)",
+            "Butter Chicken",
+            "Full plate",
+            225.0,
+        ),
+        (
+            "Main Course (Non-Veg)",
+            "Chicken Biryani",
+            "Full plate",
+            175.0,
+        ),
+        (
+            "Main Course (Non-Veg)",
+            "Mutton Curry / Biryani",
+            "Full plate",
+            275.0,
+        ),
         ("Fast Food & Street", "Pav Bhaji", "2 pav + bhaji", 75.0),
         (
             "Fast Food & Street",
@@ -96,24 +122,39 @@ pub fn default_menu() -> Vec<MenuItem> {
             "1 item",
             60.0,
         ),
-        (
-            "Fast Food & Street",
-            "Veg / Chicken Momos",
-            "6-8 pcs",
-            65.0,
-        ),
+        ("Fast Food & Street", "Veg / Chicken Momos", "6-8 pcs", 65.0),
         (
             "Fast Food & Street",
             "Veg / Egg / Chicken Roll",
             "1 roll",
             65.0,
         ),
-        ("Fast Food & Street", "Veg Fried Rice / Noodles", "Full plate", 100.0),
+        (
+            "Fast Food & Street",
+            "Veg Fried Rice / Noodles",
+            "Full plate",
+            100.0,
+        ),
         ("Desserts & Beverages", "Gulab Jamun", "2 pcs", 45.0),
         ("Desserts & Beverages", "Rasgulla", "2 pcs", 45.0),
-        ("Desserts & Beverages", "Cutting Chai / Special Tea", "1 cup / glass", 15.0),
-        ("Desserts & Beverages", "Filter Coffee / Cold Coffee", "1 cup / glass", 40.0),
-        ("Desserts & Beverages", "Sweet / Salted / Mango Lassi", "1 glass", 50.0),
+        (
+            "Desserts & Beverages",
+            "Cutting Chai / Special Tea",
+            "1 cup / glass",
+            15.0,
+        ),
+        (
+            "Desserts & Beverages",
+            "Filter Coffee / Cold Coffee",
+            "1 cup / glass",
+            40.0,
+        ),
+        (
+            "Desserts & Beverages",
+            "Sweet / Salted / Mango Lassi",
+            "1 glass",
+            50.0,
+        ),
     ];
 
     rows.iter()

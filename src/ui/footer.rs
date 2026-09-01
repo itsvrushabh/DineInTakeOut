@@ -1,11 +1,6 @@
 //! Footer shortcut guide rendering.
 
-use ratatui::{
-    layout::Rect,
-    text::{Line},
-    widgets::{Paragraph},
-    Frame,
-};
+use ratatui::{layout::Rect, text::Line, widgets::Paragraph, Frame};
 
 use crate::app::App;
 

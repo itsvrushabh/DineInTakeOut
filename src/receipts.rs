@@ -1,6 +1,6 @@
 //! Receipt rendering logic.
 
-use crate::models::{Order};
+use crate::models::Order;
 
 pub fn money(value: f64) -> String {
     if value < 0.0 {
@@ -25,7 +25,10 @@ pub fn render_receipt(order: &Order, customer_mobile: Option<&str>, gst_number: 
     out.push_str(&"-".repeat(42));
     out.push('\n');
     out.push_str(&format!("Bill #{:<6} Table: {}\n", order.id, order.label));
-    out.push_str(&format!("{}\n", chrono::Local::now().format("%d-%m-%Y %H:%M")));
+    out.push_str(&format!(
+        "{}\n",
+        chrono::Local::now().format("%d-%m-%Y %H:%M")
+    ));
     out.push_str(&format!("Mode : {}\n", order.service.label()));
     if let Some(mobile) = customer_mobile {
         out.push_str(&format!("Mobile: {mobile}\n"));
@@ -45,15 +48,31 @@ pub fn render_receipt(order: &Order, customer_mobile: Option<&str>, gst_number: 
     let totals = order.totals();
     out.push_str(&"-".repeat(42));
     out.push('\n');
-    out.push_str(&format!("{:<22}{:>20}\n", "Subtotal", money(totals.subtotal)));
+    out.push_str(&format!(
+        "{:<22}{:>20}\n",
+        "Subtotal",
+        money(totals.subtotal)
+    ));
     if totals.discount > 0.0 {
-        out.push_str(&format!("{:<22}{:>20}\n", "Discount", money(-totals.discount)));
+        out.push_str(&format!(
+            "{:<22}{:>20}\n",
+            "Discount",
+            money(-totals.discount)
+        ));
     }
     if totals.ac_charge > 0.0 {
-        out.push_str(&format!("{:<22}{:>20}\n", "AC Surcharge", money(totals.ac_charge)));
+        out.push_str(&format!(
+            "{:<22}{:>20}\n",
+            "AC Surcharge",
+            money(totals.ac_charge)
+        ));
     }
     if totals.gst > 0.0 {
-        out.push_str(&format!("{:<22}{:>20}\n", format!("GST ({:.1}%)", totals.gst_rate * 100.0), money(totals.gst)));
+        out.push_str(&format!(
+            "{:<22}{:>20}\n",
+            format!("GST ({:.1}%)", totals.gst_rate * 100.0),
+            money(totals.gst)
+        ));
     }
     out.push_str(&format!("{:<22}{:>20}\n", "TOTAL", money(totals.total)));
     out.push_str(&"-".repeat(42));

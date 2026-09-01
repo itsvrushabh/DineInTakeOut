@@ -8,12 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::{
-    app::App,
-    models::PaymentMode,
-    receipts::money,
-    ui::centered_rect,
-};
+use crate::{app::App, models::PaymentMode, receipts::money, ui::centered_rect};
 
 pub fn render_mobile_entry(f: &mut Frame, app: &App) {
     let area = centered_rect(50, 7, f.area());
