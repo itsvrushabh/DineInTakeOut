@@ -725,9 +725,16 @@ impl App {
                 "Your bill for {} is ready. Total: {}",
                 order_label, totals.total
             );
-            tokio::spawn(async move {
-                if let Err(e) = send_whatsapp_message(&mobile, &message).await {
-                    eprintln!("Failed to send WhatsApp message: {}", e);
+            std::thread::spawn(move || {
+                if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    rt.block_on(async move {
+                        if let Err(e) = send_whatsapp_message(&mobile, &message).await {
+                            eprintln!("Failed to send WhatsApp message: {}", e);
+                        }
+                    });
                 }
             });
         }

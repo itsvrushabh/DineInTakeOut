@@ -13,14 +13,14 @@ mod whatsapp;
 use app::App;
 use ui::ui;
 
-#[tokio::main]
-async fn main() -> io::Result<()> {
+fn main() -> io::Result<()> {
     let mut terminal = ratatui::init();
-    let result = run(&mut terminal).await;
+    let result = run(&mut terminal);
     ratatui::restore();
     result
 }
-async fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
+
+fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
     let mut app = App::new();
     loop {
         app.tick_notification();
