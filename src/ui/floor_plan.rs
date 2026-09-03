@@ -119,7 +119,7 @@ pub fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
 
             let cell_text = match &countdown {
                 Some(mins) => format!("{glyph}{mins}"),
-                None => format!("{glyph}"),
+                None => glyph.to_string(),
             };
             spans.push(Span::raw(" "));
             spans.push(Span::styled(

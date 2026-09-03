@@ -45,10 +45,12 @@ pub fn ui(f: &mut Frame, app: &App) {
         .areas(f.area());
 
     let [tabs_area, _table_input_area] =
-        Layout::horizontal([Constraint::Fill(1), Constraint::Length(30)])
-        .areas(top_row);
-    
-    f.render_widget(Block::default().borders(Borders::ALL).title(" Table Jump "), _table_input_area);
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(30)]).areas(top_row);
+
+    f.render_widget(
+        Block::default().borders(Borders::ALL).title(" Table Jump "),
+        _table_input_area,
+    );
 
     if app.focus == Focus::TableJump {
         f.render_widget(

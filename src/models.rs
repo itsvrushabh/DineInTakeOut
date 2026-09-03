@@ -202,7 +202,7 @@ impl Area {
             Area {
                 name: "Front Garden".to_string(),
                 is_ac: false,
-                table_count: 4,
+                table_count: 5,
             },
             Area {
                 name: "AC Rooms".to_string(),
@@ -212,12 +212,12 @@ impl Area {
             Area {
                 name: "Main Hall".to_string(),
                 is_ac: false,
-                table_count: 4,
+                table_count: 6,
             },
             Area {
                 name: "Back Garden".to_string(),
                 is_ac: false,
-                table_count: 4,
+                table_count: 8,
             },
         ]
     }
