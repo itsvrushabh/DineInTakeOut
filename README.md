@@ -46,4 +46,18 @@ The menu is read from `menu.csv` only to seed an empty database on first run; af
 ```bash
 cargo fmt --check
 cargo check
+cargo test
+```
+
+The test suite covers domain calculations, CSV import/export edge cases,
+isolated database round-trips, order/billing keyboard workflows, receipt
+formatting, Unicode currency, and Ratatui rendering through `TestBackend`.
+Tests use temporary database files and do not invoke CUPS. Real terminal
+startup, terminal sizes, physical keyboard behavior, and printer availability
+are tracked in `README-TEST-CHECKLIST.md` as manual checks.
+
+For local LLVM coverage, install `cargo-llvm-cov` and the LLVM tools, then run:
+
+```bash
+cargo llvm-cov --all-features --workspace --html
 ```

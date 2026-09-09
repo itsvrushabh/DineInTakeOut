@@ -2,15 +2,7 @@ use std::{io, time::Duration};
 
 use crossterm::event::{self, Event, KeyEventKind};
 
-mod app;
-mod config;
-mod db;
-mod models;
-mod receipts;
-mod ui;
-
-use app::App;
-use ui::ui;
+use dinein_takeout_billing::{app::App, ui::ui};
 
 fn main() -> io::Result<()> {
     let mut terminal = ratatui::init();

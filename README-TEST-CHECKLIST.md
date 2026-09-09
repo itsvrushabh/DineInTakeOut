@@ -1,9 +1,27 @@
 # Manual & Hardware Validation Checklist: DineInTakeOut
 
 ## Automated Checks
-- [ ] All unit/integration tests (`cargo test`)
-- [ ] Rustfmt/linting
+- [x] All unit/integration tests (`cargo test`)
+- [x] Rustfmt/linting (`cargo fmt --check`, `cargo check`)
 - [ ] Coverage (`cargo llvm-cov`)
+
+The automated suite includes domain totals and enum transitions, CSV edge
+cases, isolated Turso persistence, order lifecycle and billing workflows,
+mobile/offer/payment keyboard routing, receipt formatting, and Ratatui
+`TestBackend` rendering. It uses temporary databases and does not require a
+printer or a real terminal.
+
+Coverage command (install `cargo-llvm-cov` and the LLVM tools first):
+
+```bash
+cargo llvm-cov --all-features --workspace --html
+cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+```
+
+Coverage should be interpreted by layer: production state, persistence,
+receipt, configuration, and rendering logic are automated; terminal setup,
+the event polling loop, physical keyboards, terminal emulators, and CUPS
+remain manual or environment-specific checks.
 
 ## PTY/Terminal Flows
 - [ ] App boots in real terminal
