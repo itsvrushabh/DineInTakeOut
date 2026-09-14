@@ -34,7 +34,6 @@ use crate::{
         },
         notifications::render_notification,
         recent_bills::render_recent_bills,
-        search::render_search,
         table_info::render_table_info,
     },
 };
@@ -47,11 +46,10 @@ pub fn ui(f: &mut Frame, app: &App) {
 
     let compact = f.area().height < 33;
     let tabs_height = (app.areas.len() + 4).clamp(7, 16) as u16;
-    let [top_row, search_area, body, recent_bills_area, footer_area, notification_area] =
+    let [top_row, body, recent_bills_area, footer_area, notification_area] =
         Layout::vertical(if compact {
             [
                 Constraint::Length(tabs_height),
-                Constraint::Length(3),
                 Constraint::Min(6),
                 Constraint::Length(0),
                 Constraint::Length(1),
@@ -60,7 +58,6 @@ pub fn ui(f: &mut Frame, app: &App) {
         } else {
             [
                 Constraint::Length(tabs_height),
-                Constraint::Length(3),
                 Constraint::Fill(1),
                 Constraint::Length(7),
                 Constraint::Length(1),
@@ -79,7 +76,6 @@ pub fn ui(f: &mut Frame, app: &App) {
 
     render_tabs(f, app, tabs_area);
     render_table_info(f, app, table_info_area);
-    render_search(f, app, search_area);
     render_menu(f, app, menu_area);
     render_bill(f, app, cart_area);
     if !compact {

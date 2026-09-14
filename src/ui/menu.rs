@@ -8,18 +8,26 @@ use ratatui::{
     Frame,
 };
 
-use crate::{app::App, models::Focus, receipts::money};
+use crate::{app::App, models::Focus, receipts::money, ui::search::render_search};
 
 pub fn render_menu(f: &mut Frame, app: &App, area: Rect) {
+    let is_search = app.focus == Focus::Search;
+    let is_menu = app.focus == Focus::Menu;
+    let is_active = is_search || is_menu;
+
+    let title = if is_search {
+        " [4] Menu · [3] Search (Enter/↓: select item · Esc: exit search) "
+    } else if is_menu {
+        " [4] Menu (/: search · Enter: add · ←/→: cat · o: stock) "
+    } else {
+        " [4] Menu "
+    };
+
     let block = Block::default()
         .borders(Borders::ALL)
         .title(Span::styled(
-            if app.focus == Focus::Menu {
-                " [4] Menu (Enter: add · ←/→: cat · o: stock) "
-            } else {
-                " [4] Menu "
-            },
-            if app.focus == Focus::Menu {
+            title,
+            if is_active {
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
@@ -27,7 +35,7 @@ pub fn render_menu(f: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(Color::DarkGray)
             },
         ))
-        .border_style(if app.focus == Focus::Menu {
+        .border_style(if is_active {
             Style::default().fg(Color::Yellow)
         } else {
             Style::default()
@@ -36,8 +44,15 @@ pub fn render_menu(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(block.clone(), area);
     let inner = block.inner(area);
 
-    let [cat_area, table_area] =
-        Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
+    let search_h = if inner.height >= 12 { 3 } else { 1 };
+    let [search_area, cat_area, table_area] = Layout::vertical([
+        Constraint::Length(search_h),
+        Constraint::Length(1),
+        Constraint::Fill(1),
+    ])
+    .areas(inner);
+
+    render_search(f, app, search_area);
 
     // Build category pill bar
     let mut spans = Vec::new();

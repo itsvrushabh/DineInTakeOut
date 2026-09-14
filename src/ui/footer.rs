@@ -272,6 +272,36 @@ pub fn render_footer(f: &mut Frame, app: &App, area: Rect) {
             ),
             Span::raw("Next"),
         ],
+        Focus::Search => vec![
+            Span::styled(
+                "[Enter/↓] ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Select Item  "),
+            Span::styled(
+                "[Esc] ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Exit Search  "),
+            Span::styled(
+                "[Tab] ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Menu / Cart  "),
+            Span::styled(
+                "[?] ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Help"),
+        ],
         _ => vec![
             Span::styled(
                 "[?] ",
