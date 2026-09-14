@@ -2,6 +2,7 @@ use std::{io, time::Duration};
 
 use crossterm::event::{self, Event, KeyEventKind};
 
+use dinein_takeout_billing::{app::App, ui::ui};
 mod app;
 mod config;
 mod db;
