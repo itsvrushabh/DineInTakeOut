@@ -22,30 +22,28 @@ pub fn render_recent_bills(f: &mut Frame, app: &App, area: Rect) {
     let bills_active = is_recent_focus && app.recent_tab == RecentTab::Bills;
     let kots_active = is_recent_focus && app.recent_tab == RecentTab::Kots;
 
-    // --- Box 1: Recent Bills ---
+    // --- Box 6: Recent Bills ---
     let bills_title_style = if bills_active {
         Style::default()
-            .fg(Color::Cyan)
+            .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD)
     } else if is_recent_focus {
-        Style::default().fg(Color::Yellow)
+        Style::default().fg(Color::White)
     } else {
-        Style::default()
-            .fg(Color::Magenta)
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(Color::DarkGray)
     };
 
     let bills_border_style = if bills_active {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(Color::Yellow)
     } else {
         Style::default().fg(Color::DarkGray)
     };
 
     let bills_title = Span::styled(
         if bills_active {
-            " Recent Bills [Active] "
+            " [6] Recent Bills [Active] "
         } else {
-            " Recent Bills "
+            " [6] Recent Bills "
         },
         bills_title_style,
     );
@@ -93,30 +91,28 @@ pub fn render_recent_bills(f: &mut Frame, app: &App, area: Rect) {
         bills_area,
     );
 
-    // --- Box 2: KOT Bills ---
+    // --- Box 7: KOT Bills ---
     let kots_title_style = if kots_active {
         Style::default()
-            .fg(Color::Cyan)
+            .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD)
     } else if is_recent_focus {
-        Style::default().fg(Color::Yellow)
+        Style::default().fg(Color::White)
     } else {
-        Style::default()
-            .fg(Color::Magenta)
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(Color::DarkGray)
     };
 
     let kots_border_style = if kots_active {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(Color::Yellow)
     } else {
         Style::default().fg(Color::DarkGray)
     };
 
     let kots_title = Span::styled(
         if kots_active {
-            " KOT Bills [Active] "
+            " [7] KOT Bills [Active] "
         } else {
-            " KOT Bills "
+            " [7] KOT Bills "
         },
         kots_title_style,
     );

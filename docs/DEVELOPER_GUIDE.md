@@ -227,13 +227,25 @@ The root layout calculates vertical constraints dynamically based on terminal he
   - Top Row (Tabs & Table Info): Fixed height based on area count.
   - Search Area: 3 rows.
   - Body (Menu & Cart): Flexible fill.
-  - Recent Bills: 7 rows.
+  - Recent Bills & KOTs: 7 rows.
   - Footer: 1 row.
   - Notifications: 3 rows.
 - **Compact Mode (Height < 33 rows)**:
   - Recent bills are hidden (`Constraint::Length(0)`).
   - Notifications are compressed to 2 rows.
   - Table info width is capped at `34.min(f.area().width / 2)`.
+
+### Generalized Numbered Box Architecture (`1`–`7`)
+Every functional container in the TUI is identified by an index number rendered in its border header:
+- **`[1]` Floor Plan** (`ui/floor_plan.rs`): Tables and area lifecycle cards (`Focus::Tables`).
+- **`[2]` Table Details / Jump** (`ui/table_info.rs`): Active table specs and live search input (`Focus::TableJump`).
+- **`[3]` Menu Search** (`ui/search.rs`): Fuzzy item filter bar (`Focus::Search`).
+- **`[4]` Menu Catalogue** (`ui/menu.rs`): Categorized dish listings with stock availability (`Focus::Menu`).
+- **`[5]` Bill & Cart** (`ui/bill.rs`): Active order cart lines, totals, and historical receipt preview (`Focus::Cart`).
+- **`[6]` Recent Bills** (`ui/recent_bills.rs`): Latest settled checks log (`Focus::RecentBills`, `RecentTab::Bills`).
+- **`[7]` KOT Bills** (`ui/recent_bills.rs`): Latest kitchen order tickets log (`Focus::RecentBills`, `RecentTab::Kots`).
+
+`App::switch_to_box(box_num: u8)` handles zero-latency navigation when digit keys `1`–`7` are pressed across all non-modal views.
 
 ### Modal Views (`ui/modals.rs`)
 - `render_daily_report`: Formatted Z-Report table with sales breakdown and payment metrics.

@@ -7,8 +7,8 @@
 | `↑` / `↓` or `j` / `k` | Select a menu item, cart item, area, or saved bill |
 | `←` / `→` or `h` / `l` | Select a table in the active area |
 | `[` / `]` | Cycle left / right through all open orders (dine-in and take-out) |
-| `1`–`9` | Jump to a table area |
-| `g` | Search / jump to any table (by number, area, or status) |
+| `1`–`7` | Jump directly to Box: `[1]` Tables, `[2]` Jump, `[3]` Search, `[4]` Menu, `[5]` Cart, `[6]` Bills, `[7]` KOTs |
+| `g` (or `2`) | Search / jump to any table (by number, area, or status) |
 | `m` | Move / transfer order to clean table, or merge into occupied table (in Tables) |
 | `/` | Focus menu search |
 | `o` | Toggle menu item out-of-stock ("86") status (in Menu) |

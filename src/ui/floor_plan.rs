@@ -33,7 +33,7 @@ pub fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(Line::from(vec![
-            Span::styled(" Floor plan ", title_style),
+            Span::styled(" [1] Floor plan ", title_style),
             Span::styled(" (? help · g jump) ", Style::default().fg(Color::DarkGray)),
         ]))
         .border_style(border_style);

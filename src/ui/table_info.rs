@@ -39,7 +39,7 @@ fn render_table_details(f: &mut Frame, app: &App, area: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(Span::styled(" Table Details [g: Jump] ", title_style))
+        .title(Span::styled(" [2] Table Details [g: Jump] ", title_style))
         .border_style(border_style);
 
     let inner = block.inner(area);
@@ -180,7 +180,7 @@ fn render_table_search(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(Span::styled(
-            " Search Table (Esc: Back) ",
+            " [2] Search Table (Esc: Back) ",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),

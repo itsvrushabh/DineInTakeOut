@@ -55,20 +55,29 @@ pub fn render_menu(f: &mut Frame, app: &App, area: Rect) {
         ],
     )
     .header(Row::new(vec!["Item", "Unit", "Price"]).bold().underlined())
-    .block(Block::default().borders(Borders::ALL).title(Span::styled(
-        if app.focus == Focus::Menu {
-            " Menu (Enter: add · o: 86 toggle stock) "
-        } else {
-            " Menu "
-        },
-        if app.focus == Focus::Menu {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        },
-    )));
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(Span::styled(
+                if app.focus == Focus::Menu {
+                    " [4] Menu (Enter: add · o: 86 toggle stock) "
+                } else {
+                    " [4] Menu "
+                },
+                if app.focus == Focus::Menu {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                },
+            ))
+            .border_style(if app.focus == Focus::Menu {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            }),
+    );
 
     f.render_widget(table, area);
 }

@@ -28,18 +28,18 @@ bills/z_report_*.txt <── daily sales summary  ──┘
 - **`src/config.rs`**: Default menu dataset and spreadsheet-friendly CSV I/O for `menu.csv` (with item availability), `areas.csv`, `offers.csv`, and `config.csv` (with `UpiId`).
 - **`src/receipts.rs`**: Plaintext 42-column receipt rendering, Kitchen Order Ticket (KOT) formatting, daily Z-report rendering, dynamic Unicode half-block UPI QR code generator (`qrcode` crate), `bills/` file storage, and CUPS printing.
 - **`src/db.rs`**: Embedded Turso database engine (`data/billing.db`): automated daily startup backups (`data/backups/`), menu catalogue, physical table status, unpaid open orders and cart lines with notes (for session restoration across restarts), paid order history, daily sales aggregation queries, and historical bill search.
-- **`src/app.rs`**: Application state (`App`), lifecycle transitions, cart actions, item cooking notes, stock 86 toggling, table move and merge logic, bill search, daily sales reporting, payment mode updates, modal flows, and keyboard input routing.
-- **`src/ui/`**: Modular Ratatui rendering components:
+- **`src/app.rs`**: Application state (`App`), lifecycle transitions, generalized `switch_to_box(1..=7)` navigation, cart actions, item cooking notes, stock 86 toggling, table move and merge logic, bill search, daily sales reporting, payment mode updates, modal flows, and keyboard input routing.
+- **`src/ui/`**: Modular Ratatui rendering components organized into a generalized numbered box architecture:
   - `ui/mod.rs`: Root layout and area distribution with adaptive compact height support.
-  - `ui/floor_plan.rs`: Floor plan area bars, table cards, take-out chips, and lifecycle legend.
-  - `ui/table_info.rs`: Active table details (status, order ID, bill total, payment mode badge) and interactive table search/jump input (`g`).
-  - `ui/search.rs`: Fuzzy search input box and match counters.
-  - `ui/menu.rs`: Menu table with category, unit, price columns, and `[86 OUT]` badges.
-  - `ui/bill.rs`: Cart lines table with item cooking notes (`↳ <note>`), paid title banner, and totals breakdown.
+  - `ui/floor_plan.rs`: `[1]` Floor plan area bars, table cards, take-out chips, and lifecycle legend.
+  - `ui/table_info.rs`: `[2]` Active table details and interactive table search/jump input (`2` / `g`).
+  - `ui/search.rs`: `[3]` Menu fuzzy search input box and match counters (`3` / `/`).
+  - `ui/menu.rs`: `[4]` Menu catalogue table with category, unit, price columns, and `[86 OUT]` badges (`4`).
+  - `ui/bill.rs`: `[5]` Active cart lines table, notes, totals breakdown, and historical bill/KOT preview (`5`).
+  - `ui/recent_bills.rs`: `[6]` Recent Bills and `[7]` KOT Bills side-by-side horizontal panel (`6` / `7`).
   - `ui/notifications.rs`: Status banner (adapts to compact and standard terminal sizes).
-  - `ui/recent_bills.rs`: Dual-box horizontal panel showing Recent Bills and KOT Bills with tab navigation (`←`/`→`).
   - `ui/modals.rs`: Customer mobile capture, payment mode confirmation, discount offer selection, daily sales summary (Z-report), historical bill search, dynamic UPI QR display, table move/merge selector, item note buffer, and help overlay.
-  - `ui/footer.rs`: Contextual keyboard shortcut reference.
+  - `ui/footer.rs`: Contextual keyboard shortcut reference and `[1-7] Box` jumping indicators.
 - **`src/main.rs`**: Minimal entry point: terminal initialization/restoration, raw mode setup, and event polling loop.
 
 ---

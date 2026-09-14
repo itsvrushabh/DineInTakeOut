@@ -22,7 +22,11 @@ pub fn render_search(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(Span::styled(
-            if active { " Search (/) " } else { " Search " },
+            if active {
+                " [3] Search (/) "
+            } else {
+                " [3] Search "
+            },
             title_style,
         ))
         .border_style(if active {

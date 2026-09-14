@@ -19,7 +19,7 @@ pub fn render_bill(f: &mut Frame, app: &App, area: Rect) {
         match app.recent_tab {
             RecentTab::Bills => {
                 let block = Block::default().borders(Borders::ALL).title(Span::styled(
-                    " Previous bill — read only ",
+                    " [5] Previous bill — read only ",
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
@@ -34,7 +34,7 @@ pub fn render_bill(f: &mut Frame, app: &App, area: Rect) {
             }
             RecentTab::Kots => {
                 let block = Block::default().borders(Borders::ALL).title(Span::styled(
-                    " KOT Ticket — read only ",
+                    " [5] KOT Ticket — read only ",
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
@@ -53,7 +53,21 @@ pub fn render_bill(f: &mut Frame, app: &App, area: Rect) {
     if app.orders.is_empty() {
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(Span::styled(" Cart ", Style::default().fg(Color::DarkGray)));
+            .title(Span::styled(
+                " [5] Cart ",
+                if app.focus == Focus::Cart {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                },
+            ))
+            .border_style(if app.focus == Focus::Cart {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            });
         f.render_widget(Paragraph::new("No active order").block(block), area);
         return;
     }
@@ -65,7 +79,7 @@ pub fn render_bill(f: &mut Frame, app: &App, area: Rect) {
     let title = if paid {
         if let Some(mode) = order.payment_mode {
             format!(
-                " Bill #{} — PAID via {} ✔ ({} / {}) ",
+                " [5] Bill #{} — PAID via {} ✔ ({} / {}) ",
                 order.id,
                 mode.display().to_uppercase(),
                 order.label,
@@ -73,7 +87,7 @@ pub fn render_bill(f: &mut Frame, app: &App, area: Rect) {
             )
         } else {
             format!(
-                " Bill #{} — PAID ✔ ({} / {}) ",
+                " [5] Bill #{} — PAID ✔ ({} / {}) ",
                 order.id,
                 order.label,
                 order.service.label()
@@ -81,41 +95,48 @@ pub fn render_bill(f: &mut Frame, app: &App, area: Rect) {
         }
     } else if bill_ready {
         format!(
-            " Bill #{} — READY FOR BILL ⏳ ({} / {}) ",
+            " [5] Bill #{} — READY FOR BILL ⏳ ({} / {}) ",
             order.id,
             order.label,
             order.service.label()
         )
     } else if serving {
         format!(
-            " Bill #{} — SERVING ★ ({} / {}) ",
+            " [5] Bill #{} — SERVING ★ ({} / {}) ",
             order.id,
             order.label,
             order.service.label()
         )
     } else {
         format!(
-            " Bill #{} — {} / {} ",
+            " [5] Bill #{} — {} / {} ",
             order.id,
             order.label,
             order.service.label()
         )
     };
 
-    let block = Block::default().borders(Borders::ALL).title(Span::styled(
-        title,
-        if paid {
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD)
-        } else if app.focus == Focus::Cart {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(
+            title,
+            if paid {
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD)
+            } else if app.focus == Focus::Cart {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            },
+        ))
+        .border_style(if app.focus == Focus::Cart {
+            Style::default().fg(Color::Yellow)
         } else {
-            Style::default().fg(Color::DarkGray)
-        },
-    ));
+            Style::default()
+        });
 
     // Render outer block frame
     f.render_widget(block.clone(), area);

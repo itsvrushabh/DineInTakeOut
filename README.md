@@ -3,7 +3,7 @@
 [![Rust](https://img.shields.io/badge/Rust-2021_Edition-orange?logo=rust)](https://www.rust-lang.org/)
 [![TUI](https://img.shields.io/badge/TUI-Ratatui_0.28-blue)](https://github.com/ratatui-org/ratatui)
 [![Database](https://img.shields.io/badge/Database-Turso_SQLite-teal)](https://turso.tech/)
-[![Tests](https://img.shields.io/badge/Tests-18_Unit_%7C_18_Integration_Passing-brightgreen)](tests/integration_smoke.rs)
+[![Tests](https://img.shields.io/badge/Tests-18_Unit_%7C_19_Integration_Passing-brightgreen)](tests/integration_smoke.rs)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 A high-performance, keyboard-driven Terminal User Interface (TUI) billing, table management, and point-of-sale system engineered for dine-in restaurants and take-out counters.
@@ -14,14 +14,14 @@ Built in pure Rust using **Ratatui** and powered by an embedded **Turso SQLite e
 
 ```text
 ┌────────────────────────────────────────────────────────┬──────────────────────────────────┐
-│ Areas / Floor Plan: [1] Main Hall  [2] AC Rooms  [TK]   │ Table Details [g: Jump]          │
+│ [1] Floor Plan: Main Hall  AC Rooms  [TK]              │ [2] Table Details [g: Jump]      │
 │ T1 [Ready]  T2 [Ordering]  T3 [Serving]  T4 [Paid: UPI]│ Table: T4 [Paid: UPI]            │
 │ TK1 [Ready for Bill]                                   │ Order: #4 (Main-T4)              │
 │                                                        │ Bill : ₹450.00 [UPI] (3 items)   │
 ├────────────────────────────────────────────────────────┴──────────────────────────────────┤
-│ Search: paneer_                                               (2 matches)                 │
+│ [3] Search: paneer_                                           (2 matches)                 │
 ├──────────────────────────────────┬────────────────────────────────────────────────────────┤
-│ Menu [Category: Main Course]     │ Bill #4 — PAID via UPI ✔ (Main-T4 / Dine-In)           │
+│ [4] Menu [Category: Main Course] │ [5] Current Bill #4 — PAID via UPI ✔                   │
 │ Paneer Butter Masala    ₹180.00  │ Item                  Qty    Each    Total             │
 │ Palak Paneer   [86 OUT] ₹170.00  │ Butter Naan             2   40.00    80.00             │
 │ Dal Makhani             ₹140.00  │   ↳ Extra crisp                                        │
@@ -32,13 +32,13 @@ Built in pure Rust using **Ratatui** and powered by an embedded **Turso SQLite e
 │                                  │ TOTAL                                ₹462.00           │
 │                                  │ Payment Type                            UPI            │
 ├──────────────────────────────────┴────────────────────────────────────────────────────────┤
-│ Recent Bills [Active] (←/→ switch)        │ KOT Bills (latest 10)                         │
+│ [6] Recent Bills [Active]                 │ [7] KOT Bills (latest 10)                     │
 │ Bill #4   Main-T4    Dine-In  [UPI]  ₹462 │ KOT #2  Main-T4 (3 items)  14:32              │
 │ Bill #3   TK1        Take-Out [CASH] ₹250 │ KOT #1  AC-101  (2 items)  14:15              │
 ├───────────────────────────────────────────┴───────────────────────────────────────────────┤
 │ Notification: Generated KOT for Main-T4. Saved to database (ID #2)                        │
 ├───────────────────────────────────────────────────────────────────────────────────────────┤
-│ Tab: Next panel · ↑↓: Select · Enter: Add/Open · p: Bill · k: KOT · z: Z-Report · ?: Help │
+│ [1-7] Box · ↑↓: Select · Enter: Add/Open · p: Bill · k: KOT · z: Z-Report · ?: Help       │
 └───────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -46,6 +46,7 @@ Built in pure Rust using **Ratatui** and powered by an embedded **Turso SQLite e
 
 ## Key Highlights
 
+- **Generalized Numbered Box Architecture (`1`–`7`)**: Every panel across the TUI is numbered: `[1]` Floor Plan, `[2]` Table Details & Jump, `[3]` Menu Search, `[4]` Menu Catalogue, `[5]` Bill & Cart, `[6]` Recent Bills, and `[7]` KOT Bills. Pressing any digit `1`–`7` jumps directly to that specific box without requiring multi-step `Tab` cycling.
 - **Visual Floor Plan & Stage Lifecycle**: Track dining rooms in real time (`Ready` → `Taking order` → `Serving` → `Ready for bill` → `Bill paid` → `Cleaning` → `Ready`). Tables feature an automated 10-minute cleaning countdown or instant turnaround override (`r`).
 - **Table Move, Transfer & Merge (`m`)**: Seamlessly move an active check to a free table (automatically recalculating taxes & AC charges) or merge carts into an already occupied table.
 - **Interactive Table Search & Jump (`g`)**: Instantly search across all tables by number, room name, or status code (`ready`, `paid`, `dirty`) and jump directly to any order.
@@ -95,16 +96,16 @@ cargo build --release
 
 | Shortcut | Description |
 | :--- | :--- |
+| `1`–`7` | **Jump Directly to Box**: `[1]` Tables, `[2]` Jump, `[3]` Search, `[4]` Menu, `[5]` Cart, `[6]` Bills, `[7]` KOTs |
 | `Tab` / `BackTab` | Cycle focus forward / backward across panels |
-| `←` / `→` or `h` / `l` | Select table within current dining area |
-| `1`–`9` | Jump directly to a dining area tab |
+| `←` / `→` or `h` / `l` | Select table within current dining area / Toggle Recent Bills vs KOT Bills |
 | `Enter` | Open order on table / Switch to table order / Add item to cart |
 | `s` | Advance order stage (Taking order → Serving → Ready for bill) |
-| `g` | Open **Search / Jump Table** popup |
+| `g` (or `2`) | Open **Search / Jump Table** popup |
 | `m` | **Move / Transfer / Merge Table**: Transfer to clean table or merge into occupied table |
 | `t` | Create a new **Take-Out** order |
 | `[` / `]` | Cycle between all active open orders |
-| `/` | Focus **Menu Search** bar |
+| `/` (or `3`) | Focus **Menu Search** bar |
 | `o` | Toggle item **Out-of-Stock ("86")** status in Menu catalogue |
 | `+` / `-` | Increase / decrease quantity of selected cart line |
 | `x` / `Delete` | Remove selected item line from cart |
@@ -156,7 +157,7 @@ cargo clippy --all-targets -- -D warnings
 
 ### Test Coverage Highlights
 - **18 Unit Tests**: Domain financial math, AC surcharges, GST rules, cart operations, table CSV & config CSV round-trips, empty fallback menu verification, isolated database round-trips, and daily sales aggregation queries.
-- **18 Integration Tests**: Full terminal UI simulations using Ratatui's headless `TestBackend`, validating table jump search, mobile entry, offer selection, payment type switching (UPI/Cash/Card), receipt updates, hotel receipt header details, KOT generation and database persistence, dual-box Recent Bills & KOT viewer navigation, item notes, "86" stock toggle, table moves/merges, dynamic UPI QR rendering, Z-reports in database, bill search, and automated daily backups.
+- **19 Integration Tests**: Full terminal UI simulations using Ratatui's headless `TestBackend`, validating generalized 1–7 numbered box switching, table jump search, mobile entry, offer selection, payment type switching (UPI/Cash/Card), receipt updates, hotel receipt header details, KOT generation and database persistence, dual-box Recent Bills & KOT viewer navigation, item notes, "86" stock toggle, table moves/merges, dynamic UPI QR rendering, Z-reports in database, bill search, and automated daily backups.
 
 To run code coverage with LLVM tools:
 ```bash

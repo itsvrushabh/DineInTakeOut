@@ -843,3 +843,125 @@ fn two_box_recent_bills_and_kots_in_db() {
 
     let _ = fs::remove_file(database_path);
 }
+
+#[test]
+fn generalized_box_switching_by_number() {
+    let (mut app, database_path) = fixture();
+
+    // App starts in Focus::Menu (Box 4)
+    assert_eq!(app.focus, Focus::Menu);
+
+    // Press '1' -> Switch to Box 1: Tables
+    app.handle_key(KeyCode::Char('1'));
+    assert_eq!(app.focus, Focus::Tables);
+
+    // Press '4' -> Switch to Box 4: Menu
+    app.handle_key(KeyCode::Char('4'));
+    assert_eq!(app.focus, Focus::Menu);
+
+    // Press '5' -> Switch to Box 5: Cart
+    app.handle_key(KeyCode::Char('5'));
+    assert_eq!(app.focus, Focus::Cart);
+
+    // Press '6' -> Switch to Box 6: Recent Bills
+    app.handle_key(KeyCode::Char('6'));
+    assert_eq!(app.focus, Focus::RecentBills);
+    assert_eq!(app.recent_tab, RecentTab::Bills);
+
+    // Press '7' -> Switch to Box 7: KOT Bills
+    app.handle_key(KeyCode::Char('7'));
+    assert_eq!(app.focus, Focus::RecentBills);
+    assert_eq!(app.recent_tab, RecentTab::Kots);
+
+    // Press '1' -> Switch back to Box 1: Tables
+    app.handle_key(KeyCode::Char('1'));
+    assert_eq!(app.focus, Focus::Tables);
+
+    // Press '2' -> Switch to Box 2: Table Jump
+    app.handle_key(KeyCode::Char('2'));
+    assert_eq!(app.focus, Focus::TableJump);
+
+    // Press Esc in Table Jump -> Returns to Box 1: Tables
+    app.handle_key(KeyCode::Esc);
+    assert_eq!(app.focus, Focus::Tables);
+
+    // Press '3' -> Switch to Box 3: Search
+    app.handle_key(KeyCode::Char('3'));
+    assert_eq!(app.focus, Focus::Search);
+
+    // Press Esc in Search -> Exits to Box 4: Menu
+    app.handle_key(KeyCode::Esc);
+    assert_eq!(app.focus, Focus::Menu);
+
+    // Test Tab cycling across all boxes:
+    // From Menu (4) -> Cart (5)
+    app.handle_key(KeyCode::Tab);
+    assert_eq!(app.focus, Focus::Cart);
+
+    // From Cart (5) -> Recent Bills (6)
+    app.handle_key(KeyCode::Tab);
+    assert_eq!(app.focus, Focus::RecentBills);
+    assert_eq!(app.recent_tab, RecentTab::Bills);
+
+    // From Recent Bills (6) -> KOT Bills (7)
+    app.handle_key(KeyCode::Tab);
+    assert_eq!(app.focus, Focus::RecentBills);
+    assert_eq!(app.recent_tab, RecentTab::Kots);
+
+    // From KOT Bills (7) -> Tables (1)
+    app.handle_key(KeyCode::Tab);
+    assert_eq!(app.focus, Focus::Tables);
+
+    // From Tables (1) -> Search (3)
+    app.handle_key(KeyCode::Tab);
+    assert_eq!(app.focus, Focus::Search);
+
+    // From Search (3) -> Menu (4)
+    app.handle_key(KeyCode::Tab);
+    assert_eq!(app.focus, Focus::Menu);
+
+    // Test BackTab (reverse cycling):
+    // From Menu (4) -> Search (3)
+    app.handle_key(KeyCode::BackTab);
+    assert_eq!(app.focus, Focus::Search);
+
+    // From Search (3) -> Tables (1)
+    app.handle_key(KeyCode::BackTab);
+    assert_eq!(app.focus, Focus::Tables);
+
+    // From Tables (1) -> KOT Bills (7)
+    app.handle_key(KeyCode::BackTab);
+    assert_eq!(app.focus, Focus::RecentBills);
+    assert_eq!(app.recent_tab, RecentTab::Kots);
+
+    // From KOT Bills (7) -> Recent Bills (6)
+    app.handle_key(KeyCode::BackTab);
+    assert_eq!(app.focus, Focus::RecentBills);
+    assert_eq!(app.recent_tab, RecentTab::Bills);
+
+    // From Recent Bills (6) -> Cart (5)
+    app.handle_key(KeyCode::BackTab);
+    assert_eq!(app.focus, Focus::Cart);
+
+    // Verify UI rendering contains all 7 box numbers
+    let backend = TestBackend::new(100, 35);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| ui(frame, &app)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+
+    assert!(text.contains("[1]"), "UI should show Box [1]");
+    assert!(text.contains("[2]"), "UI should show Box [2]");
+    assert!(text.contains("[3]"), "UI should show Box [3]");
+    assert!(text.contains("[4]"), "UI should show Box [4]");
+    assert!(text.contains("[5]"), "UI should show Box [5]");
+    assert!(text.contains("[6]"), "UI should show Box [6]");
+    assert!(text.contains("[7]"), "UI should show Box [7]");
+
+    let _ = fs::remove_file(database_path);
+}

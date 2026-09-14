@@ -14,6 +14,13 @@ pub fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     let text = match app.focus {
         Focus::Menu => vec![
             Span::styled(
+                "[1-7] ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Box  "),
+            Span::styled(
                 "[Enter] ",
                 Style::default()
                     .fg(Color::Yellow)
@@ -64,6 +71,13 @@ pub fn render_footer(f: &mut Frame, app: &App, area: Rect) {
             Span::raw("Help"),
         ],
         Focus::Cart => vec![
+            Span::styled(
+                "[1-7] ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Box  "),
             Span::styled(
                 "[+/-] ",
                 Style::default()
@@ -116,6 +130,13 @@ pub fn render_footer(f: &mut Frame, app: &App, area: Rect) {
         ],
         Focus::Tables => vec![
             Span::styled(
+                "[1-7] ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Box  "),
+            Span::styled(
                 "[Enter] ",
                 Style::default()
                     .fg(Color::Yellow)
@@ -166,6 +187,13 @@ pub fn render_footer(f: &mut Frame, app: &App, area: Rect) {
             Span::raw("Z-Report"),
         ],
         Focus::RecentBills => vec![
+            Span::styled(
+                "[1-7] ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Box  "),
             Span::styled(
                 "[←/→] ",
                 Style::default()

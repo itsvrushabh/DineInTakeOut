@@ -48,14 +48,14 @@ The screen is divided into clear functional panels designed to minimize clutter 
 
 ```text
 ┌────────────────────────────────────────────────────────┬──────────────────────────────────┐
-│ Areas / Floor Plan: [1] Main Hall  [2] AC Rooms  [TK]   │ Table Details [g: Jump]          │
+│ [1] Floor Plan: Main Hall  AC Rooms  [TK]              │ [2] Table Details [g: Jump]      │
 │ T1 [Ready]  T2 [Ordering]  T3 [Serving]  T4 [Paid: UPI]│ Table: T4 [Paid: UPI]            │
 │ TK1 [Ready for Bill]                                   │ Order: #4 (Main-T4)              │
 │                                                        │ Bill : ₹450.00 [UPI] (3 items)   │
 ├────────────────────────────────────────────────────────┴──────────────────────────────────┤
-│ Search: paneer_                                               (2 matches)                 │
+│ [3] Search: paneer_                                           (2 matches)                 │
 ├──────────────────────────────────┬────────────────────────────────────────────────────────┤
-│ Menu [Category: Main Course]     │ Bill #4 — PAID via UPI ✔ (Main-T4 / Dine-In)           │
+│ [4] Menu [Category: Main Course] │ [5] Current Bill #4 — PAID via UPI ✔                   │
 │ Paneer Butter Masala    ₹180.00  │ Item                  Qty    Each    Total             │
 │ Palak Paneer   [86 OUT] ₹170.00  │ Butter Naan             2   40.00    80.00             │
 │ Dal Makhani             ₹140.00  │   ↳ Extra crisp                                        │
@@ -66,25 +66,26 @@ The screen is divided into clear functional panels designed to minimize clutter 
 │                                  │ TOTAL                                ₹462.00           │
 │                                  │ Payment Type                            UPI            │
 ├──────────────────────────────────┴────────────────────────────────────────────────────────┤
-│ Recent Bills [Active] (←/→ switch)        │ KOT Bills (latest 10)                         │
+│ [6] Recent Bills [Active]                 │ [7] KOT Bills (latest 10)                     │
 │ Bill #4   Main-T4    Dine-In  [UPI]  ₹462 │ KOT #2  Main-T4 (3 items)  14:32              │
 │ Bill #3   TK1        Take-Out [CASH] ₹250 │ KOT #1  AC-101  (2 items)  14:15              │
 ├───────────────────────────────────────────┴───────────────────────────────────────────────┤
 │ Notification: Generated KOT for Main-T4. Saved to database (ID #2)                        │
 ├───────────────────────────────────────────────────────────────────────────────────────────┤
-│ Tab: Next panel · ↑↓: Select · Enter: Add/Open · p: Bill · k: KOT · z: Z-Report · ?: Help │
+│ [1-7] Box · ↑↓: Select · Enter: Add/Open · p: Bill · k: KOT · z: Z-Report · ?: Help       │
 └───────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Panel Overview
-1. **Floor Plan (Top Left)**: Shows dining areas, table status cards, and active take-out chips.
-2. **Table Details & Jump Box (Top Right)**: Shows active table info, order ID, items count, bill total with payment badge, or an interactive table search/jump input when pressing `g`.
-3. **Menu Search (Middle)**: Real-time fuzzy item search with instant filtering.
-4. **Menu Catalogue (Body Left)**: Categorized item listings with prices and portion units.
-5. **Bill & Cart View (Body Right)**: Active order line items, quantity, item prices, subtotal, discount, AC surcharge, GST breakdown, final total, and payment type badge.
-6. **Recent Bills & KOTs (Lower Body)**: Dual side-by-side boxes showing recent settled bills (left) and latest kitchen order tickets (right). Use `←`/`→` to toggle focus between boxes.
-7. **Notification Banner (Bottom)**: Operational feedback, validation warnings, and confirmation messages.
-8. **Footer (Bottom Edge)**: Contextual hotkey reminders.
+### Panel Overview (Generalized Numbered Boxes)
+1. **[1] Floor Plan (Top Left)**: Shows dining areas, table status cards, and active take-out chips.
+2. **[2] Table Details & Jump Box (Top Right)**: Shows active table info, order ID, items count, bill total with payment badge, or an interactive table search/jump input when pressing `2` or `g`.
+3. **[3] Menu Search (Middle)**: Real-time fuzzy item search with instant filtering (press `3` or `/`).
+4. **[4] Menu Catalogue (Body Left)**: Categorized item listings with prices, portion units, and stock availability (press `4`).
+5. **[5] Bill & Cart View (Body Right)**: Active order line items, quantity, item prices, subtotal, discount, AC surcharge, GST breakdown, final total, and payment type badge (press `5`).
+6. **[6] Recent Bills (Lower Body Left)**: Quick-reference log of the latest settled bills with payment mode tags (press `6`).
+7. **[7] KOT Bills (Lower Body Right)**: Log of latest kitchen order tickets with timestamps and reprint status (press `7`).
+8. **Notification Banner (Bottom)**: Operational feedback, validation warnings, and confirmation messages.
+9. **Footer (Bottom Edge)**: Contextual hotkey reminders and quick-box indicators.
 
 ---
 
@@ -94,15 +95,16 @@ You can operate the entire system using only the keyboard:
 
 | Action | Primary Key | Alternate Key |
 | :--- | :--- | :--- |
+| **Jump Directly to Box [1]–[7]** | `1` to `7` | Direct jump to any numbered box |
 | **Move Focus between Panels** | `Tab` | `Shift+Tab` (Backwards) |
 | **Navigate Items / Rows** | `↓` (Down) / `↑` (Up) | `j` / `k` |
 | **Navigate Tables in Floor Plan** | `→` (Right) / `←` (Left) | `l` / `h` |
-| **Switch Directly to Dining Area** | `1` to `9` | — |
+| **Toggle Recent Bills / KOT Bills** | `←` / `→` (in Box 6/7) | `h` / `l` or press `6` / `7` |
 | **Cycle through Open Orders** | `]` (Next) / `[` (Prev) | — |
-| **Focus Search Bar** | `/` | — |
-| **Search / Jump to Any Table** | `g` | — |
+| **Focus Search Bar** | `3` or `/` | `Tab` to Box 3 |
+| **Search / Jump to Any Table** | `2` or `g` | — |
 | **Open Help Screen** | `?` | — |
-| **Quit Application** | `q` | `Esc` (when not in a modal) |
+| **Quit Application** | `q` | `Esc` (when not in a modal/search) |
 
 ---
 
@@ -431,8 +433,8 @@ To protect against system crashes or disk faults:
 
 | Category | Key | Description |
 | :--- | :--- | :--- |
+| **Box Jump** | `1`–`7` | Jump directly to Box: `[1]` Tables, `[2]` Jump, `[3]` Search, `[4]` Menu, `[5]` Cart, `[6]` Bills, `[7]` KOTs |
 | **Floor Plan** | `←` / `→` or `h` / `l` | Select table |
-| | `1`–`9` | Jump directly to area |
 | | `Enter` | Open order on ready table / switch to table |
 | | `s` | Advance order stage (Taking order → Serving → Ready for bill) |
 | | `g` | Search and jump to any table |

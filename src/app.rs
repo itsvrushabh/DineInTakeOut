@@ -1529,6 +1529,45 @@ impl App {
         self.focus = self.focus_return;
     }
 
+    /// Switch focus directly to a specific box by its 1-indexed number.
+    /// [1] Tables & Floor Plan
+    /// [2] Table Details & Jump
+    /// [3] Menu Search
+    /// [4] Menu Catalogue
+    /// [5] Active Bill & Cart
+    /// [6] Recent Bills
+    /// [7] KOT Bills
+    pub fn switch_to_box(&mut self, box_num: u8) {
+        match box_num {
+            1 => {
+                self.focus = Focus::Tables;
+            }
+            2 => {
+                self.focus = Focus::TableJump;
+                self.table_input.clear();
+                self.table_search_index = 0;
+            }
+            3 => {
+                self.focus = Focus::Search;
+            }
+            4 => {
+                self.focus = Focus::Menu;
+            }
+            5 => {
+                self.focus = Focus::Cart;
+            }
+            6 => {
+                self.focus = Focus::RecentBills;
+                self.recent_tab = RecentTab::Bills;
+            }
+            7 => {
+                self.focus = Focus::RecentBills;
+                self.recent_tab = RecentTab::Kots;
+            }
+            _ => {}
+        }
+    }
+
     pub fn handle_key(&mut self, key: KeyCode) -> bool {
         let in_protected = matches!(
             self.focus,
@@ -1584,6 +1623,21 @@ impl App {
                 self.open_daily_report();
                 return false;
             }
+
+            let in_modal = matches!(
+                self.focus,
+                Focus::PaymentMode
+                    | Focus::OfferSelect
+                    | Focus::DailyReport
+                    | Focus::TableMove
+                    | Focus::UpiQr
+            );
+            if !in_modal {
+                if let KeyCode::Char(d @ '1'..='7') = key {
+                    self.switch_to_box(d as u8 - b'0');
+                    return false;
+                }
+            }
         }
 
         match self.focus {
@@ -1596,10 +1650,10 @@ impl App {
                     self.search.pop();
                     self.menu_index = 0;
                 }
-                KeyCode::Down => self.focus = Focus::Menu,
+                KeyCode::Esc | KeyCode::Down => self.focus = Focus::Menu,
                 KeyCode::Enter => self.add_selected_to_cart(),
                 KeyCode::Tab => self.focus = Focus::Menu,
-                KeyCode::BackTab => self.focus = Focus::RecentBills,
+                KeyCode::BackTab => self.focus = Focus::Tables,
                 _ => {}
             },
             Focus::Menu => match key {
@@ -1659,7 +1713,8 @@ impl App {
                 }
                 KeyCode::Enter | KeyCode::Char('p') => self.begin_billing(),
                 KeyCode::Tab => {
-                    self.focus = Focus::Tables;
+                    self.focus = Focus::RecentBills;
+                    self.recent_tab = RecentTab::Bills;
                 }
                 KeyCode::BackTab => self.focus = Focus::Menu,
                 _ => {}
@@ -1721,15 +1776,11 @@ impl App {
                     self.table_search_index = 0;
                 }
                 KeyCode::Char('b') | KeyCode::Char('p') => self.begin_billing(),
-                KeyCode::BackTab => self.focus = Focus::Cart,
-                KeyCode::Tab => self.focus = Focus::RecentBills,
-                KeyCode::Char(d @ '1'..='9') => {
-                    let idx = (d as u8 - b'1') as usize;
-                    if idx < self.areas.len() {
-                        self.selected_area_index = idx;
-                        self.selected_table_index = 0;
-                    }
+                KeyCode::BackTab => {
+                    self.focus = Focus::RecentBills;
+                    self.recent_tab = RecentTab::Kots;
                 }
+                KeyCode::Tab => self.focus = Focus::Search,
                 _ => {}
             },
             Focus::RecentBills => match key {
@@ -1770,8 +1821,14 @@ impl App {
                         self.reprint_selected_recent_kot();
                     }
                 },
-                KeyCode::Tab => self.focus = Focus::Search,
-                KeyCode::BackTab => self.focus = Focus::Tables,
+                KeyCode::Tab => match self.recent_tab {
+                    RecentTab::Bills => self.recent_tab = RecentTab::Kots,
+                    RecentTab::Kots => self.focus = Focus::Tables,
+                },
+                KeyCode::BackTab => match self.recent_tab {
+                    RecentTab::Bills => self.focus = Focus::Cart,
+                    RecentTab::Kots => self.recent_tab = RecentTab::Bills,
+                },
                 _ => {}
             },
             Focus::MobileEntry => match key {
