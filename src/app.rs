@@ -17,6 +17,7 @@ use crate::{
         PhysicalTable, Service, TableStatus, CLEANING_MINUTES,
     },
     receipts::render_receipt,
+    whatsapp::send_whatsapp_message,
 };
 
 pub const DB_PATH: &str = "data/billing.db";
@@ -719,6 +720,26 @@ impl App {
         self.recent_bills.truncate(5);
         self.recent_bill_index = 0;
         self.notify(format!("Bill #{} saved to database.", order_id));
+
+        if let Some(mobile) = customer_mobile {
+            let mobile = mobile.to_string();
+            let message = format!(
+                "Your bill for {} is ready. Total: {}",
+                order_label, totals.total
+            );
+            std::thread::spawn(move || {
+                if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    rt.block_on(async move {
+                        if let Err(e) = send_whatsapp_message(&mobile, &message).await {
+                            eprintln!("Failed to send WhatsApp message: {}", e);
+                        }
+                    });
+                }
+            });
+        }
 
         self.order_mut().status = OrderStatus::Paid;
 

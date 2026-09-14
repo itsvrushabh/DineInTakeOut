@@ -3,6 +3,16 @@ use std::{io, time::Duration};
 use crossterm::event::{self, Event, KeyEventKind};
 
 use dinein_takeout_billing::{app::App, ui::ui};
+mod app;
+mod config;
+mod db;
+mod models;
+mod receipts;
+mod ui;
+mod whatsapp;
+
+use app::App;
+use ui::ui;
 
 fn main() -> io::Result<()> {
     let mut terminal = ratatui::init();
@@ -31,3 +41,4 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
         }
     }
 }
+
