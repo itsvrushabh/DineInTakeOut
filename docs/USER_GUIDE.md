@@ -173,7 +173,9 @@ When an active order's cart is open:
 - **Increase Quantity**: Press `+` or `=`.
 - **Decrease Quantity**: Press `-`. Decreasing a quantity of `1` automatically removes the item from the cart.
 - **Remove Line Item**: Press `x` or `Delete`.
-- **Clear Cart**: Press `c` while in the Menu panel to clear all unpaid items.
+- **Complimentary Items (`c`)**: Highlight any cart item and press `c` to toggle **Complimentary (`[NC]`)**. Its subtotal evaluates to ₹0.00, automatically excluding it from taxable calculations.
+- **Item Discounts (`d`)**: Press `d` on the selected cart item to cycle custom discounts (`0%` ➔ `10%` ➔ `20%` ➔ `50%` ➔ `100%` ➔ `0%`). The line reflects a tag like `[-20%]`.
+- **Clear Active Cart (`Shift+C`)**: Press `C` to immediately clear all items from the current cart.
 - **Attach Item Cooking Notes (`n`)**:
   - Highlight any line item in the cart and press `n`.
   - The **Item Special Note** dialog opens.
@@ -184,21 +186,39 @@ When an active order's cart is open:
 
 ---
 
-## 8. Kitchen Order Tickets (KOT) (`k`)
+## 8. Kitchen Order Tickets (KOT) & Kitchen Display System (KDS)
 
 DineInTakeOut provides full back-of-house kitchen coordination:
 
-1. After taking or updating guest orders, press `k` from the Menu or Cart panel.
-2. A 42-column Kitchen Order Ticket is generated:
-   - Includes Table / Take-out label, Area name, Order ID, and current timestamp.
-   - Lists each dish and quantity ordered alongside attached cooking notes (`↳ Note: ...`).
-   - Omits prices and taxes so kitchen staff can focus purely on order preparation.
-3. The ticket is saved directly to the database (`kots` table) and immediately appears in the **KOT Bills** box in the bottom panel. No text files are written to disk, keeping the system clean.
-4. If a CUPS thermal printer is configured, the ticket is instantly printed to the kitchen printer.
-5. **Duplicate / Reprint Protection**:
-   - The first KOT printed displays `*** KITCHEN ORDER TICKET (KOT) ***`.
-   - Any subsequent print for the same order automatically displays `*** KITCHEN ORDER TICKET [REPRINT] ***` to prevent chefs from accidentally double-preparing dishes.
-6. **Reprint from Recent Panel**: You can highlight any past KOT in the **KOT Bills** box and press `p`, `r`, or `Enter` to reprint it at any time.
+### Incremental / Delta KOTs (`k`) & Sent Quantities
+1. When taking the initial order, press `k` from the Cart or Menu panel. A full KOT is generated, saved to the database (`kots` table), dispatched to thermal printers, and logged in the **KOT Bills** box.
+2. In the Cart, items show a `[KOT]` tag indicating they have been sent.
+3. **Add-on / Incremental Orders (Delta KOT)**:
+   - When guests order additional items or increase quantities later (e.g. 2 more Butter Naans), press `k`.
+   - The system calculates `qty.saturating_sub(kot_sent_qty)` and prints an **ADD-ON / DELTA** ticket containing *only* the new items and incremental quantities.
+   - The ticket header reads `*** KITCHEN ORDER TICKET (ADD-ON / DELTA) ***`.
+   - Cart badges update live: items with partial sends show `[KOT 2/4]` until the full quantity is fired.
+4. **Force Full Reprint (`Shift+K`)**:
+   - If the chef loses a ticket or requests the complete check, press `Shift+K` (`K`) in Cart Box `[5]`.
+   - Generates a full ticket with all items marked `*** KITCHEN ORDER TICKET [REPRINT] ***`.
+
+### Kitchen Display System (KDS) Live Monitor (`K` / `F7`)
+For kitchens equipped with a dedicated terminal monitor:
+1. Press `K` from the Recent panel, or `F7` from anywhere in the application.
+2. The fullscreen **Kitchen Display System** activates:
+   - Displays all active dining room and take-out KOT cards in dynamic columns.
+   - Shows Table #, Guest Area, Order ID, Dish List, and attached cooking notes.
+   - **Color-Coded Elapsed Timers**:
+     - `< 10 minutes`: **Green (Normal)**
+     - `10–20 minutes`: **Yellow (Warning)**
+     - `> 20 minutes`: **Red (URGENT ALERT)**
+3. **Bump Order Status**:
+   - Highlight any ticket (`↑`/`↓` or `w`/`s`).
+   - Press `Space` or `Enter` to cycle status:
+     `PENDING` ➔ `PREPARING` ➔ `READY` ➔ `SERVED`
+   - Bumping immediately updates the ticket border color and database record.
+   - When marked `SERVED`, the ticket automatically clears from the live kitchen screen.
+4. Press `r` or `F5` to refresh active tickets, or `Esc` / `K` to return to the dining room floor plan.
 
 ---
 
@@ -273,8 +293,22 @@ The application natively supports all standard restaurant settlement options:
 | **Cash** | `1` or `c` | Physical currency payment |
 | **UPI** | `2` or `u` | QR code, PhonePe, Google Pay, Paytm, BHIM |
 | **Card** | `3` or `d` | POS debit/credit card swipe or tap |
-| **Person Credit** | `4` | Regular customer tab / ledger account |
-| **Have it on Hotel** | `5` | House complimentary, VIP, or manager comp |
+| **Split Tender** | `4` or `s` | Mixed payment (e.g. ₹500 Cash + balance on UPI/Card) |
+| **Person Credit** | `5` | Regular customer tab / ledger account |
+| **Have it on Hotel** | `6` | House complimentary, VIP, or manager comp |
+
+### Split Payment Tender & Auto-Fill (`4` / `s`)
+When customers wish to split a bill across multiple tender types:
+1. In the payment mode modal, press `4` or `s`.
+2. The **Split Payment Tender** dialog opens with 3 editable fields:
+   - `1. Cash Amount`
+   - `2. UPI Amount`
+   - `3. Card Amount`
+3. Press `Tab` or `↑` / `↓` to switch between tender fields.
+4. Type the amount received for the current tender.
+5. **Auto-Fill Balance (`a`)**: To avoid manual math, press `a` in the remaining tender field. The system automatically computes `Remaining = Bill Total - Other Tenders` and fills it in.
+6. The dialog displays live `Total Paid` and `Balance Due`. Once the balance reaches ₹0.00 (`(Settled)`), the border turns green.
+7. Press `Enter` to confirm payment and save with tender `SPLIT`. ESC/POS cash drawers automatically kick open if cash was part of the split tender.
 
 ### Dynamic On-Screen UPI QR Code (`q`)
 When customers choose UPI, cashiers can generate an on-screen QR code:
@@ -328,7 +362,23 @@ At shift change or end-of-day closing:
 
 ---
 
-## 16. Order Settlement & Table Cleaning
+## 16. End-of-Day Sales & Tax Analytics Dashboard (`A` / `F8`)
+
+For comprehensive business intelligence beyond simple cashier register totals:
+1. Press `A` or `F8` from anywhere in the application.
+2. The **Sales & Tax Analytics Dashboard** opens:
+   - **4 Live KPI Metrics**:
+     - **Net Revenue**: Total tax-exclusive sales revenue, with gross figure below.
+     - **Total Orders**: Completed checks with average ticket value calculation.
+     - **GST Tax Collected**: Total tax collections, with exact CGST (2.5%) and SGST (2.5%) breakdown.
+     - **Discounts Given**: Total promotional savings provided.
+   - **Payment Tender Distribution Table**: Lists all active tenders (Cash, UPI, Card, Split, etc.) with bill counts, monetary totals, and percentage share of total revenue.
+   - **Best Selling Dishes Table**: Ranks top 5 revenue-generating dishes, showing units sold, revenue contribution, and high-visibility ASCII volume trend bars (`████████`).
+3. Press `Esc`, `Enter`, or `A` to close the dashboard and return to operations.
+
+---
+
+## 17. Order Settlement & Table Cleaning
 
 When guests leave the table:
 

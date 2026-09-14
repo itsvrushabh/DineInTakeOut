@@ -57,11 +57,19 @@ pub fn render_receipt(
     out.push('\n');
 
     for line in &order.cart {
+        let tag = if line.is_complimentary {
+            " [NC]"
+        } else if line.discount_percent > 0.0 {
+            " [DISC]"
+        } else {
+            ""
+        };
+        let display_name = format!("{}{}", line.name, tag);
         out.push_str(&format!(
             "{:<22}{:>4} × {:<10}\n",
-            line.name,
+            display_name,
             line.qty,
-            money(line.unit_price * line.qty as f64)
+            money(line.total())
         ));
         if let Some(note) = &line.note {
             out.push_str(&format!("  ↳ {}\n", note));
@@ -113,6 +121,16 @@ pub fn render_receipt(
 }
 
 pub fn render_kot(order: &Order, is_reprint: bool, restaurant_name: &str) -> String {
+    render_kot_items(order, &order.cart, is_reprint, false, restaurant_name)
+}
+
+pub fn render_kot_items(
+    order: &Order,
+    items: &[crate::models::CartLine],
+    is_reprint: bool,
+    is_delta: bool,
+    restaurant_name: &str,
+) -> String {
     let mut out = String::new();
     let r_name = if restaurant_name.trim().is_empty() {
         "SHREE KRISHNA RESTAURANT"
@@ -123,6 +141,8 @@ pub fn render_kot(order: &Order, is_reprint: bool, restaurant_name: &str) -> Str
     out.push('\n');
     let title = if is_reprint {
         "*** KITCHEN ORDER TICKET [REPRINT] ***"
+    } else if is_delta {
+        "*** KITCHEN ORDER TICKET (ADD-ON / DELTA) ***"
     } else {
         "*** KITCHEN ORDER TICKET (KOT) ***"
     };
@@ -144,7 +164,7 @@ pub fn render_kot(order: &Order, is_reprint: bool, restaurant_name: &str) -> Str
     out.push_str(&format!("{:<32}{:>10}\n", "ITEM", "QTY"));
     out.push_str(&"-".repeat(42));
     out.push('\n');
-    for line in &order.cart {
+    for line in items {
         out.push_str(&format!("{:<32}{:>10}\n", line.name, line.qty));
         if let Some(note) = &line.note {
             out.push_str(&format!("  ↳ {}\n", note));

@@ -11,7 +11,9 @@ use ratatui::{
 use crate::{app::App, models::PaymentMode, receipts::money, ui::centered_rect};
 
 pub fn render_mobile_entry(f: &mut Frame, app: &App) {
-    let area = centered_rect(50, 7, f.area());
+    let has_crm = app.customer_crm.as_ref().is_some_and(|c| c.visit_count > 0);
+    let height = if has_crm { 10 } else { 7 };
+    let area = centered_rect(54, height, f.area());
     f.render_widget(Clear, area);
 
     let complete = app.mobile_buffer.len() == 10;
@@ -35,7 +37,7 @@ pub fn render_mobile_entry(f: &mut Frame, app: &App) {
     }
     let display = format!("{} {}", &padded[..5], &padded[5..]);
 
-    let lines = vec![
+    let mut lines = vec![
         Line::styled(
             "Enter customer mobile number (or Enter to skip)",
             Style::default().fg(Color::DarkGray),
@@ -50,22 +52,46 @@ pub fn render_mobile_entry(f: &mut Frame, app: &App) {
                 })
                 .add_modifier(Modifier::BOLD),
         )),
-        Line::styled(
-            "Enter: bill · Backspace: edit · Esc: cancel",
-            Style::default().fg(Color::DarkGray),
-        ),
     ];
+
+    if let Some(crm) = &app.customer_crm {
+        if crm.visit_count > 0 {
+            lines.push(Line::from(vec![Span::styled(
+                format!(
+                    "★ VIP Member: {} visits · Spent {}",
+                    crm.visit_count,
+                    money(crm.total_spent)
+                ),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )]));
+            if !crm.favorite_items.is_empty() {
+                let favs = crm
+                    .favorite_items
+                    .iter()
+                    .map(|(n, q)| format!("{n} ({q})"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                lines.push(Line::styled(
+                    format!("Favorites: {favs}"),
+                    Style::default().fg(Color::Yellow),
+                ));
+            }
+        }
+    }
+
+    lines.push(Line::styled(
+        "Enter: bill · Backspace: edit · Esc: cancel",
+        Style::default().fg(Color::DarkGray),
+    ));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
-    let rows: Vec<Rect> = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
-    .flex(Flex::Center)
-    .split(inner)
-    .to_vec();
+    let rows: Vec<Rect> = Layout::vertical(vec![Constraint::Length(1); lines.len()])
+        .flex(Flex::Center)
+        .split(inner)
+        .to_vec();
     for (line, rect) in lines.into_iter().zip(rows) {
         f.render_widget(Paragraph::new(line).alignment(Alignment::Center), rect);
     }
@@ -73,7 +99,7 @@ pub fn render_mobile_entry(f: &mut Frame, app: &App) {
 
 pub fn render_payment_mode(f: &mut Frame, app: &App) {
     let modes = PaymentMode::all();
-    let area = centered_rect(52, (modes.len() as u16) + 7, f.area());
+    let area = centered_rect(54, (modes.len() as u16) + 7, f.area());
     f.render_widget(Clear, area);
 
     let title_text = if app.close_on_payment {
@@ -125,8 +151,9 @@ pub fn render_payment_mode(f: &mut Frame, app: &App) {
             PaymentMode::Cash => "[1 / c]",
             PaymentMode::Upi => "[2 / u]",
             PaymentMode::Card => "[3 / d]",
-            PaymentMode::PersonCredit => "[4]",
-            PaymentMode::HaveItOnHotel => "[5]",
+            PaymentMode::Split => "[4 / s]",
+            PaymentMode::PersonCredit => "[5]",
+            PaymentMode::HaveItOnHotel => "[6]",
         };
         let line_text = format!("{marker}{:<8} {:<18}", shortcut, mode.display());
         lines.push(Line::from(Span::styled(
@@ -142,9 +169,9 @@ pub fn render_payment_mode(f: &mut Frame, app: &App) {
         )));
     }
     let footer_text = if app.close_on_payment {
-        "↑↓/1–5/c,u,d: select · Enter: close · Esc: cancel"
+        "↑↓/1–6/c,u,d,s: select · Enter: close · Esc: cancel"
     } else {
-        "↑↓/1–5/c,u,d: select · Enter: update bill · Esc: cancel"
+        "↑↓/1–6/c,u,d,s: select · Enter: update bill · Esc: cancel"
     };
     lines.push(Line::styled(
         footer_text,
@@ -158,7 +185,133 @@ pub fn render_payment_mode(f: &mut Frame, app: &App) {
         .split(inner)
         .to_vec();
     for (line, rect) in lines.into_iter().zip(rows) {
-        f.render_widget(Paragraph::new(line), rect);
+        f.render_widget(Paragraph::new(line).alignment(Alignment::Center), rect);
+    }
+}
+
+pub fn render_split_payment(f: &mut Frame, app: &App) {
+    let area = centered_rect(54, 13, f.area());
+    f.render_widget(Clear, area);
+
+    let (bill_total, cash, upi, card) = app.split_payment_totals();
+    let total_paid = cash + upi + card;
+    let balance = bill_total - total_paid;
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(
+            " Split Payment Tender ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .border_style(if balance <= 0.01 {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default().fg(Color::Yellow)
+        });
+
+    let header = match app.orders.get(app.active_order) {
+        Some(order) => format!(
+            "Bill #{} ({}) — Total: {}",
+            order.id,
+            order.label,
+            money(bill_total)
+        ),
+        None => "No order selected".to_string(),
+    };
+
+    let fields = [
+        ("1. Cash Amount", &app.split_cash, 0),
+        ("2. UPI Amount", &app.split_upi, 1),
+        ("3. Card Amount", &app.split_card, 2),
+    ];
+
+    let mut lines = vec![
+        Line::styled(
+            header,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Line::styled(
+            "------------------------------------------------",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ];
+
+    for (label, val, idx) in fields {
+        let active = app.split_field == idx;
+        let prefix = if active { "▶ " } else { "  " };
+        let display_val = if val.is_empty() {
+            "0.00".to_string()
+        } else {
+            format!("{val}|")
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{prefix}{:<18}: ₹", label),
+                if active {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                },
+            ),
+            Span::styled(
+                display_val,
+                if active {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                        .underlined()
+                } else {
+                    Style::default()
+                },
+            ),
+        ]));
+    }
+
+    lines.push(Line::styled(
+        "------------------------------------------------",
+        Style::default().fg(Color::DarkGray),
+    ));
+    lines.push(Line::from(vec![
+        Span::raw(" Total Paid: "),
+        Span::styled(
+            money(total_paid),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("   Balance Due: "),
+        Span::styled(
+            if balance <= 0.01 {
+                "₹0.00 (Settled)".to_string()
+            } else {
+                money(balance)
+            },
+            if balance <= 0.01 {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+            },
+        ),
+    ]));
+    lines.push(Line::styled(
+        "Tab/↑↓: switch field · a: auto-fill · Enter: confirm · Esc: cancel",
+        Style::default().fg(Color::DarkGray),
+    ));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let rows: Vec<Rect> = Layout::vertical(vec![Constraint::Length(1); lines.len()])
+        .flex(Flex::Center)
+        .split(inner)
+        .to_vec();
+    for (line, rect) in lines.into_iter().zip(rows) {
+        f.render_widget(Paragraph::new(line).alignment(Alignment::Center), rect);
     }
 }
 

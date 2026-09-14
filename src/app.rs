@@ -14,10 +14,11 @@ use crate::{
     },
     db::Database,
     models::{
-        Area, BillSummary, CartLine, DailySalesSummary, Focus, HistoricalBill, KotSummary,
-        MenuItem, Offer, Order, OrderStatus, PaymentMode, PhysicalTable, RecentTab, Service,
-        TableStatus, CLEANING_MINUTES,
+        Area, BillSummary, CartLine, CustomerCrmProfile, DailySalesSummary, Focus, HistoricalBill,
+        KotSummary, MenuItem, Offer, Order, OrderStatus, PaymentMode, PhysicalTable, RecentTab,
+        SalesAnalytics, Service, TableStatus, CLEANING_MINUTES,
     },
+    printer::PrinterConfig,
     receipts::render_receipt,
 };
 
@@ -67,6 +68,17 @@ pub struct App {
     pub item_note_buffer: String,
     pub table_move_target_index: usize,
     pub daily_report_summary: Option<DailySalesSummary>,
+    pub categories: Vec<String>,
+    pub selected_category_index: usize,
+    pub customer_crm: Option<CustomerCrmProfile>,
+    pub split_cash: String,
+    pub split_upi: String,
+    pub split_card: String,
+    pub split_field: usize,
+    pub kds_kots: Vec<KotSummary>,
+    pub kds_index: usize,
+    pub sales_analytics: Option<SalesAnalytics>,
+    pub printer_config: PrinterConfig,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -343,6 +355,14 @@ impl App {
         };
         let next_takeout_id = max_takeout_number(&orders).saturating_add(1);
 
+        let mut categories = vec!["ALL".to_string()];
+        for it in &items {
+            if !it.category.trim().is_empty() && !categories.contains(&it.category) {
+                categories.push(it.category.clone());
+            }
+        }
+        let printer_config = PrinterConfig::from_map(&config_csv);
+
         Self {
             items,
             orders: orders.to_vec(),
@@ -387,6 +407,17 @@ impl App {
             item_note_buffer: String::new(),
             table_move_target_index: 0,
             daily_report_summary: None,
+            categories,
+            selected_category_index: 0,
+            customer_crm: None,
+            split_cash: String::new(),
+            split_upi: String::new(),
+            split_card: String::new(),
+            split_field: 0,
+            kds_kots: Vec::new(),
+            kds_index: 0,
+            sales_analytics: None,
+            printer_config,
         }
     }
     pub fn order_mut(&mut self) -> &mut Order {
@@ -933,14 +964,43 @@ impl App {
 
     pub fn visible_items(&self) -> Vec<usize> {
         let q = self.search.trim();
+        let cat_filter = self.selected_category_index > 0
+            && self.selected_category_index < self.categories.len();
+        let target_cat = if cat_filter {
+            Some(&self.categories[self.selected_category_index])
+        } else {
+            None
+        };
+
         if q.is_empty() {
-            return (0..self.items.len()).collect();
+            return self
+                .items
+                .iter()
+                .enumerate()
+                .filter_map(|(i, it)| {
+                    if let Some(cat) = target_cat {
+                        if &it.category == cat {
+                            Some(i)
+                        } else {
+                            None
+                        }
+                    } else {
+                        Some(i)
+                    }
+                })
+                .collect();
         }
+
         let mut scored: Vec<(i64, usize)> = self
             .items
             .iter()
             .enumerate()
             .filter_map(|(i, it)| {
+                if let Some(cat) = target_cat {
+                    if &it.category != cat {
+                        return None;
+                    }
+                }
                 let name_score = self.matcher.fuzzy_match(&it.name, q);
                 let cat_score = self.matcher.fuzzy_match(&it.category, q).map(|s| s / 2);
                 name_score.or(cat_score).map(|s| (s, i))
@@ -1020,22 +1080,112 @@ impl App {
         self.focus = self.focus_return;
     }
 
+    pub fn toggle_selected_line_complimentary(&mut self) {
+        if !self.ensure_editable_order() {
+            return;
+        }
+        let order = self.order_mut();
+        if order.cart.is_empty() || order.cart_index >= order.cart.len() {
+            return;
+        }
+        let line = &mut order.cart[order.cart_index];
+        line.is_complimentary = !line.is_complimentary;
+        let is_nc = line.is_complimentary;
+        let name = line.name.clone();
+        if is_nc {
+            line.discount_percent = 0.0;
+            self.notify(format!("Marked '{name}' as Complimentary (NC)."));
+        } else {
+            self.notify(format!("Removed Complimentary (NC) flag from '{name}'."));
+        }
+        self.persist_active_order();
+    }
+
+    pub fn cycle_selected_line_discount(&mut self) {
+        if !self.ensure_editable_order() {
+            return;
+        }
+        let order = self.order_mut();
+        if order.cart.is_empty() || order.cart_index >= order.cart.len() {
+            return;
+        }
+        let line = &mut order.cart[order.cart_index];
+        if line.is_complimentary {
+            line.is_complimentary = false;
+        }
+        let next_disc = match line.discount_percent as u32 {
+            0 => 10.0,
+            10 => 20.0,
+            20 => 50.0,
+            50 => 100.0,
+            _ => 0.0,
+        };
+        line.discount_percent = next_disc;
+        let name = line.name.clone();
+        self.notify(format!("Set '{name}' discount to {:.0}%.", next_disc));
+        self.persist_active_order();
+    }
+
     pub fn generate_kot(&mut self) {
         if self.orders.is_empty() {
             self.notify("No active order for KOT.".to_string());
             return;
         }
-        let order = self.order();
-        if order.cart.is_empty() {
+        if self.order().cart.is_empty() {
             self.notify("Cart is empty - cannot generate KOT.".to_string());
             return;
         }
-        let is_reprint = order.kot_sent_count > 0;
-        let kot_text = crate::receipts::render_kot(order, is_reprint, &self.restaurant_name);
-        let count: u32 = order.cart.iter().map(|l| l.qty).sum();
-        let area = order.area.clone().unwrap_or_default();
-        let label = order.label.clone();
-        let order_id = order.id;
+
+        let (kot_text, escpos, count, area, label, order_id, is_reprint, is_delta) = {
+            let order = self.order();
+            let delta_items: Vec<CartLine> = order
+                .cart
+                .iter()
+                .filter_map(|line| {
+                    let unsent = line.qty.saturating_sub(line.kot_sent_qty);
+                    if unsent > 0 {
+                        let mut cl = line.clone();
+                        cl.qty = unsent;
+                        Some(cl)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let is_delta = !delta_items.is_empty() && order.kot_sent_count > 0;
+            let is_reprint = delta_items.is_empty() && order.kot_sent_count > 0;
+
+            let items_to_print = if is_reprint {
+                order.cart.clone()
+            } else if !delta_items.is_empty() {
+                delta_items
+            } else {
+                order.cart.clone()
+            };
+
+            let kot_text = crate::receipts::render_kot_items(
+                order,
+                &items_to_print,
+                is_reprint,
+                is_delta,
+                &self.restaurant_name,
+            );
+            let escpos = crate::printer::build_escpos_kot(
+                order,
+                &items_to_print,
+                is_reprint,
+                is_delta,
+                &self.restaurant_name,
+            );
+            let count: u32 = items_to_print.iter().map(|l| l.qty).sum();
+            let area = order.area.clone().unwrap_or_default();
+            let label = order.label.clone();
+            let order_id = order.id;
+            (
+                kot_text, escpos, count, area, label, order_id, is_reprint, is_delta,
+            )
+        };
 
         let kot_id = if let Some(db) = &self.database {
             match db.save_kot(order_id, &label, &area, count, &kot_text, is_reprint) {
@@ -1061,18 +1211,193 @@ impl App {
                 ticket_text: kot_text.clone(),
                 is_reprint,
                 created_at: now_str,
+                status: "PENDING".to_string(),
             },
         );
         self.recent_kots.truncate(10);
 
-        let _ = crate::receipts::print_receipt_text(&kot_text);
-        self.order_mut().kot_sent_count += 1;
+        let _ = crate::printer::send_bytes(
+            &self.printer_config,
+            Some(&self.printer_config.kot_printer),
+            &escpos,
+        );
+
+        let order_mut = self.order_mut();
+        order_mut.kot_sent_count += 1;
+        for line in &mut order_mut.cart {
+            line.kot_sent_qty = line.qty;
+        }
+        self.persist_active_order();
+
+        let tag = if is_reprint {
+            "REPRINT"
+        } else if is_delta {
+            "DELTA"
+        } else {
+            "NEW"
+        };
         self.notify(format!(
-            "KOT #{} saved to DB & sent to kitchen ({} items) for {}.",
+            "KOT #{} ({tag}) sent to kitchen ({} items) for {}.",
             if kot_id > 0 { kot_id } else { order_id },
             count,
             label
         ));
+    }
+
+    pub fn reprint_full_kot(&mut self) {
+        if self.orders.is_empty() {
+            self.notify("No active order to reprint KOT.".to_string());
+            return;
+        }
+        if self.order().cart.is_empty() {
+            self.notify("Cart is empty.".to_string());
+            return;
+        }
+        let (kot_text, escpos, count, area, label, order_id) = {
+            let order = self.order();
+            let kot_text = crate::receipts::render_kot_items(
+                order,
+                &order.cart,
+                true,
+                false,
+                &self.restaurant_name,
+            );
+            let escpos = crate::printer::build_escpos_kot(
+                order,
+                &order.cart,
+                true,
+                false,
+                &self.restaurant_name,
+            );
+            let count: u32 = order.cart.iter().map(|l| l.qty).sum();
+            let area = order.area.clone().unwrap_or_default();
+            let label = order.label.clone();
+            let order_id = order.id;
+            (kot_text, escpos, count, area, label, order_id)
+        };
+
+        let kot_id = if let Some(db) = &self.database {
+            db.save_kot(order_id, &label, &area, count, &kot_text, true)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let now_str = chrono::Local::now().format("%H:%M:%S").to_string();
+        self.recent_kots.insert(
+            0,
+            KotSummary {
+                id: kot_id,
+                order_id,
+                label: label.clone(),
+                area,
+                item_count: count,
+                ticket_text: kot_text.clone(),
+                is_reprint: true,
+                created_at: now_str,
+                status: "PENDING".to_string(),
+            },
+        );
+        self.recent_kots.truncate(10);
+        let _ = crate::printer::send_bytes(
+            &self.printer_config,
+            Some(&self.printer_config.kot_printer),
+            &escpos,
+        );
+        self.notify(format!("Reprinted full KOT for {label} ({} items).", count));
+    }
+
+    pub fn open_kds(&mut self) {
+        if let Some(db) = &self.database {
+            self.kds_kots = db.load_active_kots();
+        } else {
+            self.kds_kots = self.recent_kots.clone();
+        }
+        self.kds_index = 0;
+        self.focus_return = self.focus;
+        self.focus = Focus::KitchenDisplay;
+    }
+
+    pub fn kds_bump_status(&mut self) {
+        if self.kds_kots.is_empty() {
+            return;
+        }
+        if let Some(kot) = self.kds_kots.get_mut(self.kds_index) {
+            let next_status = match kot.status.as_str() {
+                "PENDING" => "PREPARING",
+                "PREPARING" => "READY",
+                "READY" => "SERVED",
+                _ => "PENDING",
+            };
+            kot.status = next_status.to_string();
+            let kot_id = kot.id;
+            let table = kot.label.clone();
+            if let Some(db) = &self.database {
+                let _ = db.update_kot_status(kot_id, next_status);
+            }
+            if next_status == "SERVED" {
+                self.notify(format!("KOT #{kot_id} for {table} marked as SERVED!"));
+            } else {
+                self.notify(format!("KOT #{kot_id} for {table} status: {next_status}"));
+            }
+        }
+    }
+
+    pub fn open_split_payment(&mut self) {
+        self.split_cash.clear();
+        self.split_upi.clear();
+        self.split_card.clear();
+        self.split_field = 0;
+        self.focus = Focus::SplitPayment;
+    }
+
+    pub fn split_payment_totals(&self) -> (f64, f64, f64, f64) {
+        let bill_total = if self.orders.is_empty() {
+            0.0
+        } else {
+            self.order().totals().total
+        };
+        let cash: f64 = self.split_cash.trim().parse().unwrap_or(0.0);
+        let upi: f64 = self.split_upi.trim().parse().unwrap_or(0.0);
+        let card: f64 = self.split_card.trim().parse().unwrap_or(0.0);
+        (bill_total, cash, upi, card)
+    }
+
+    pub fn confirm_split_payment(&mut self) {
+        let (bill_total, cash, upi, card) = self.split_payment_totals();
+        let entered = cash + upi + card;
+        if entered < bill_total - 0.01 {
+            self.notify(format!(
+                "Remaining balance of ₹{:.2} must be paid!",
+                bill_total - entered
+            ));
+            return;
+        }
+        self.select_payment_mode(PaymentMode::Split);
+    }
+
+    pub fn update_customer_crm(&mut self) {
+        let phone = self.mobile_buffer.trim();
+        if phone.len() >= 4 {
+            if let Some(db) = &self.database {
+                self.customer_crm = Some(db.get_customer_crm_profile(phone));
+            }
+        } else {
+            self.customer_crm = None;
+        }
+    }
+
+    pub fn open_sales_analytics(&mut self) {
+        let today = Local::now().format("%Y-%m-%d").to_string();
+        if let Some(db) = &self.database {
+            self.sales_analytics = Some(db.get_sales_analytics(&today));
+        } else {
+            self.sales_analytics = Some(SalesAnalytics {
+                date: today,
+                ..Default::default()
+            });
+        }
+        self.focus_return = self.focus;
+        self.focus = Focus::Analytics;
     }
 
     pub fn open_daily_report(&mut self) {
@@ -1581,6 +1906,9 @@ impl App {
                 | Focus::UpiQr
                 | Focus::TableMove
                 | Focus::ItemNote
+                | Focus::KitchenDisplay
+                | Focus::SplitPayment
+                | Focus::Analytics
         );
         if matches!(key, KeyCode::Char('q')) && !in_protected {
             return true;
@@ -1596,6 +1924,7 @@ impl App {
                 | Focus::MobileEntry
                 | Focus::BillSearch
                 | Focus::ItemNote
+                | Focus::SplitPayment
         );
 
         if matches!(key, KeyCode::Char('?')) && !in_text_input {
@@ -1631,7 +1960,24 @@ impl App {
                     | Focus::DailyReport
                     | Focus::TableMove
                     | Focus::UpiQr
+                    | Focus::KitchenDisplay
+                    | Focus::SplitPayment
+                    | Focus::Analytics
             );
+
+            if (matches!(key, KeyCode::Char('a') | KeyCode::Char('A'))
+                || matches!(key, KeyCode::F(8)))
+                && !in_modal
+            {
+                self.open_sales_analytics();
+                return false;
+            }
+
+            if matches!(key, KeyCode::F(7)) && !in_modal {
+                self.open_kds();
+                return false;
+            }
+
             if !in_modal {
                 if let KeyCode::Char(d @ '1'..='7') = key {
                     self.switch_to_box(d as u8 - b'0');
@@ -1664,6 +2010,20 @@ impl App {
                     let n = self.visible_items().len();
                     if self.menu_index + 1 < n {
                         self.menu_index += 1;
+                    }
+                }
+                KeyCode::Left | KeyCode::Char('h') => {
+                    if !self.categories.is_empty() {
+                        let n = self.categories.len();
+                        self.selected_category_index = (self.selected_category_index + n - 1) % n;
+                        self.menu_index = 0;
+                    }
+                }
+                KeyCode::Right | KeyCode::Char('l') => {
+                    if !self.categories.is_empty() {
+                        let n = self.categories.len();
+                        self.selected_category_index = (self.selected_category_index + 1) % n;
+                        self.menu_index = 0;
                     }
                 }
                 KeyCode::Enter | KeyCode::Char(' ') => self.add_selected_to_cart(),
@@ -1700,12 +2060,15 @@ impl App {
                         }
                     }
                 }
-                KeyCode::Char('k') | KeyCode::Char('K') => self.generate_kot(),
+                KeyCode::Char('k') => self.generate_kot(),
+                KeyCode::Char('K') => self.reprint_full_kot(),
+                KeyCode::Char('c') => self.toggle_selected_line_complimentary(),
+                KeyCode::Char('d') => self.cycle_selected_line_discount(),
+                KeyCode::Char('C') => self.clear_active_cart(),
                 KeyCode::Char('n') => self.open_item_note_prompt(),
                 KeyCode::Char('=') | KeyCode::Char('+') => self.adjust_selected_line_quantity(1),
                 KeyCode::Char('-') => self.adjust_selected_line_quantity(-1),
                 KeyCode::Delete | KeyCode::Char('x') => self.remove_selected_line(),
-                KeyCode::Char('c') => self.clear_active_cart(),
                 KeyCode::Char('g') => {
                     self.focus = Focus::TableJump;
                     self.table_input.clear();
@@ -1821,6 +2184,9 @@ impl App {
                         self.reprint_selected_recent_kot();
                     }
                 },
+                KeyCode::Char('K') => {
+                    self.open_kds();
+                }
                 KeyCode::Tab => match self.recent_tab {
                     RecentTab::Bills => self.recent_tab = RecentTab::Kots,
                     RecentTab::Kots => self.focus = Focus::Tables,
@@ -1835,10 +2201,12 @@ impl App {
                 KeyCode::Char(c) if c.is_ascii_digit() => {
                     if self.mobile_buffer.len() < 10 {
                         self.mobile_buffer.push(c);
+                        self.update_customer_crm();
                     }
                 }
                 KeyCode::Backspace => {
                     self.mobile_buffer.pop();
+                    self.update_customer_crm();
                 }
                 KeyCode::Enter => {
                     if self.mobile_buffer.len() == 10 || self.mobile_buffer.is_empty() {
@@ -1872,9 +2240,14 @@ impl App {
                         self.payment_mode_index += 1;
                     }
                 }
-                KeyCode::Char(d @ '1'..='5') => {
-                    if let Some(mode) = PaymentMode::all().get((d as u8 - b'1') as usize) {
-                        self.select_payment_mode(*mode);
+                KeyCode::Char(d @ '1'..='6') => {
+                    let idx = (d as u8 - b'1') as usize;
+                    if let Some(mode) = PaymentMode::all().get(idx) {
+                        if *mode == PaymentMode::Split {
+                            self.open_split_payment();
+                        } else {
+                            self.select_payment_mode(*mode);
+                        }
                     }
                 }
                 KeyCode::Char('c') | KeyCode::Char('C') => {
@@ -1886,12 +2259,19 @@ impl App {
                 KeyCode::Char('d') | KeyCode::Char('D') => {
                     self.select_payment_mode(PaymentMode::Card);
                 }
+                KeyCode::Char('s') | KeyCode::Char('S') => {
+                    self.open_split_payment();
+                }
                 KeyCode::Char('q') | KeyCode::Char('Q') => {
                     self.show_upi_qr();
                 }
                 KeyCode::Enter => {
                     if let Some(mode) = PaymentMode::all().get(self.payment_mode_index) {
-                        self.select_payment_mode(*mode);
+                        if *mode == PaymentMode::Split {
+                            self.open_split_payment();
+                        } else {
+                            self.select_payment_mode(*mode);
+                        }
                     }
                 }
                 KeyCode::Esc => {
@@ -2048,6 +2428,90 @@ impl App {
                     self.save_item_note();
                 }
                 KeyCode::Esc => {
+                    self.focus = self.focus_return;
+                }
+                _ => {}
+            },
+            Focus::KitchenDisplay => match key {
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('k') | KeyCode::Char('K') => {
+                    self.focus = self.focus_return;
+                }
+                KeyCode::Up | KeyCode::Char('w') => {
+                    self.kds_index = self.kds_index.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('s') => {
+                    if !self.kds_kots.is_empty() && self.kds_index + 1 < self.kds_kots.len() {
+                        self.kds_index += 1;
+                    }
+                }
+                KeyCode::Char(' ') | KeyCode::Enter => {
+                    self.kds_bump_status();
+                }
+                KeyCode::Char('r') | KeyCode::F(5) => {
+                    if let Some(db) = &self.database {
+                        self.kds_kots = db.load_active_kots();
+                        self.notify("KDS refreshed from database.".to_string());
+                    }
+                }
+                _ => {}
+            },
+            Focus::SplitPayment => match key {
+                KeyCode::Esc => {
+                    self.focus = Focus::PaymentMode;
+                }
+                KeyCode::Tab | KeyCode::Down => {
+                    self.split_field = (self.split_field + 1) % 3;
+                }
+                KeyCode::BackTab | KeyCode::Up => {
+                    self.split_field = (self.split_field + 2) % 3;
+                }
+                KeyCode::Char('a') | KeyCode::Char('A') => {
+                    let (bill_total, cash, upi, card) = self.split_payment_totals();
+                    let current_val = match self.split_field {
+                        0 => cash,
+                        1 => upi,
+                        2 => card,
+                        _ => 0.0,
+                    };
+                    let other_paid = (cash + upi + card) - current_val;
+                    let remaining = (bill_total - other_paid).max(0.0);
+                    let rem_str = format!("{remaining:.2}");
+                    match self.split_field {
+                        0 => self.split_cash = rem_str,
+                        1 => self.split_upi = rem_str,
+                        2 => self.split_card = rem_str,
+                        _ => {}
+                    }
+                }
+                KeyCode::Char(c) if c.is_ascii_digit() || c == '.' => match self.split_field {
+                    0 => self.split_cash.push(c),
+                    1 => self.split_upi.push(c),
+                    2 => self.split_card.push(c),
+                    _ => {}
+                },
+                KeyCode::Backspace => match self.split_field {
+                    0 => {
+                        self.split_cash.pop();
+                    }
+                    1 => {
+                        self.split_upi.pop();
+                    }
+                    2 => {
+                        self.split_card.pop();
+                    }
+                    _ => {}
+                },
+                KeyCode::Enter => {
+                    self.confirm_split_payment();
+                }
+                _ => {}
+            },
+            Focus::Analytics => match key {
+                KeyCode::Esc
+                | KeyCode::Char('q')
+                | KeyCode::Char('a')
+                | KeyCode::Char('A')
+                | KeyCode::Enter => {
                     self.focus = self.focus_return;
                 }
                 _ => {}

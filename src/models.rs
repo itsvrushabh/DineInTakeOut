@@ -47,6 +47,9 @@ pub struct CartLine {
     pub unit_price: f64,
     pub qty: u32,
     pub note: Option<String>,
+    pub kot_sent_qty: u32,
+    pub is_complimentary: bool,
+    pub discount_percent: f64,
 }
 
 impl CartLine {
@@ -56,11 +59,19 @@ impl CartLine {
             unit_price,
             qty,
             note: None,
+            kot_sent_qty: 0,
+            is_complimentary: false,
+            discount_percent: 0.0,
         }
     }
 
     pub fn total(&self) -> f64 {
-        self.unit_price * self.qty as f64
+        if self.is_complimentary {
+            0.0
+        } else {
+            let factor = (1.0 - (self.discount_percent / 100.0)).clamp(0.0, 1.0);
+            (self.unit_price * factor) * self.qty as f64
+        }
     }
 }
 
@@ -102,16 +113,18 @@ pub enum PaymentMode {
     Cash,
     Upi,
     Card,
+    Split,
     PersonCredit,
     HaveItOnHotel,
 }
 
 impl PaymentMode {
-    pub fn all() -> [Self; 5] {
+    pub fn all() -> [Self; 6] {
         [
             Self::Cash,
             Self::Upi,
             Self::Card,
+            Self::Split,
             Self::PersonCredit,
             Self::HaveItOnHotel,
         ]
@@ -123,6 +136,7 @@ impl PaymentMode {
             Self::Cash => "CASH",
             Self::Upi => "UPI",
             Self::Card => "CARD",
+            Self::Split => "SPLIT",
             Self::PersonCredit => "PERSON_CREDIT",
             Self::HaveItOnHotel => "HAVE_IT_ON_HOTEL",
         }
@@ -133,6 +147,7 @@ impl PaymentMode {
             Self::Cash => "Cash",
             Self::Upi => "UPI",
             Self::Card => "Card",
+            Self::Split => "Split Tender",
             Self::PersonCredit => "Person credit",
             Self::HaveItOnHotel => "Have it on hotel",
         }
@@ -164,6 +179,9 @@ pub enum Focus {
     UpiQr,
     TableMove,
     ItemNote,
+    KitchenDisplay,
+    SplitPayment,
+    Analytics,
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -433,6 +451,7 @@ pub struct KotSummary {
     pub ticket_text: String,
     pub is_reprint: bool,
     pub created_at: String,
+    pub status: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -463,12 +482,40 @@ pub struct DailySalesSummary {
     pub cash_total: f64,
     pub card_count: usize,
     pub card_total: f64,
+    pub split_count: usize,
+    pub split_total: f64,
     pub person_credit_count: usize,
     pub person_credit_total: f64,
     pub have_it_on_hotel_count: usize,
     pub have_it_on_hotel_total: f64,
     pub other_count: usize,
     pub other_total: f64,
+}
+
+/// Customer profile summary derived from past order history.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CustomerCrmProfile {
+    pub phone: String,
+    pub visit_count: usize,
+    pub total_spent: f64,
+    pub last_visit: Option<String>,
+    pub favorite_items: Vec<(String, usize)>,
+}
+
+/// Advanced business intelligence and sales analytics summary.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SalesAnalytics {
+    pub date: String,
+    pub gross_sales: f64,
+    pub net_sales: f64,
+    pub total_discounts: f64,
+    pub total_tax: f64,
+    pub cgst: f64,
+    pub sgst: f64,
+    pub total_orders: usize,
+    pub avg_bill_value: f64,
+    pub payment_breakdown: Vec<(String, usize, f64)>,
+    pub top_items: Vec<(String, usize, f64)>,
 }
 
 /// Summary item for historical bill search.
@@ -508,9 +555,16 @@ mod tests {
 
     #[test]
     fn cart_line_total_uses_quantity() {
-        let line = CartLine::new("Samosa", 20.0, 3);
-
+        let mut line = CartLine::new("Samosa", 20.0, 3);
         assert_eq!(line.total(), 60.0);
+
+        // Test item discount (20% off of 60 = 48)
+        line.discount_percent = 20.0;
+        assert_eq!(line.total(), 48.0);
+
+        // Test complimentary (NC)
+        line.is_complimentary = true;
+        assert_eq!(line.total(), 0.0);
     }
 
     #[test]
@@ -569,7 +623,8 @@ mod tests {
         for mode in super::PaymentMode::all() {
             assert_eq!(super::PaymentMode::parse(mode.label()), Some(mode));
         }
-        assert_eq!(super::PaymentMode::all().len(), 5);
+        assert_eq!(super::PaymentMode::all().len(), 6);
         assert_eq!(super::PaymentMode::Upi.display(), "UPI");
+        assert_eq!(super::PaymentMode::Split.display(), "Split Tender");
     }
 }

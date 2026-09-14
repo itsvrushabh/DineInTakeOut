@@ -1,16 +1,94 @@
 //! Menu item catalogue table rendering.
 
 use ratatui::{
-    layout::{Alignment, Constraint, Rect},
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
-    text::{Span, Text},
-    widgets::{Block, Borders, Cell, Row, Table},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
     Frame,
 };
 
 use crate::{app::App, models::Focus, receipts::money};
 
 pub fn render_menu(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(
+            if app.focus == Focus::Menu {
+                " [4] Menu (Enter: add · ←/→: cat · o: stock) "
+            } else {
+                " [4] Menu "
+            },
+            if app.focus == Focus::Menu {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            },
+        ))
+        .border_style(if app.focus == Focus::Menu {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default()
+        });
+
+    f.render_widget(block.clone(), area);
+    let inner = block.inner(area);
+
+    let [cat_area, table_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
+
+    // Build category pill bar
+    let mut spans = Vec::new();
+    let has_prev = app.selected_category_index > 0;
+    let has_next = app.selected_category_index + 1 < app.categories.len();
+
+    spans.push(Span::styled(
+        if has_prev { " ◀ " } else { "   " },
+        if has_prev {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        },
+    ));
+
+    for (idx, cat) in app.categories.iter().enumerate() {
+        let is_selected = idx == app.selected_category_index;
+        let dist = (idx as isize - app.selected_category_index as isize).abs();
+        if dist > 2 && app.categories.len() > 5 {
+            continue;
+        }
+        if is_selected {
+            spans.push(Span::styled(
+                format!("[ {cat} ]"),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            spans.push(Span::styled(
+                format!(" {cat} "),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+    }
+
+    spans.push(Span::styled(
+        if has_next { " ▶ " } else { "   " },
+        if has_next {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        },
+    ));
+
+    f.render_widget(Paragraph::new(Line::from(spans)), cat_area);
+
     let vis = app.visible_items();
 
     let rows: Vec<Row> = vis
@@ -22,7 +100,7 @@ pub fn render_menu(f: &mut Frame, app: &App, area: Rect) {
             let item_cell = if it.is_available {
                 Cell::from(it.name.clone())
             } else {
-                Cell::from(ratatui::text::Line::from(vec![
+                Cell::from(Line::from(vec![
                     Span::styled(it.name.clone(), Style::default().fg(Color::DarkGray)),
                     Span::raw(" "),
                     Span::styled(
@@ -54,30 +132,7 @@ pub fn render_menu(f: &mut Frame, app: &App, area: Rect) {
             Constraint::Length(8),
         ],
     )
-    .header(Row::new(vec!["Item", "Unit", "Price"]).bold().underlined())
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(Span::styled(
-                if app.focus == Focus::Menu {
-                    " [4] Menu (Enter: add · o: 86 toggle stock) "
-                } else {
-                    " [4] Menu "
-                },
-                if app.focus == Focus::Menu {
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                },
-            ))
-            .border_style(if app.focus == Focus::Menu {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default()
-            }),
-    );
+    .header(Row::new(vec!["Item", "Unit", "Price"]).bold().underlined());
 
-    f.render_widget(table, area);
+    f.render_widget(table, table_area);
 }

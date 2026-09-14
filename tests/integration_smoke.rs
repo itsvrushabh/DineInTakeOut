@@ -90,6 +90,17 @@ fn fixture() -> (App, PathBuf) {
         item_note_buffer: String::new(),
         table_move_target_index: 0,
         daily_report_summary: None,
+        categories: vec!["ALL".to_string(), "Food".to_string()],
+        selected_category_index: 0,
+        customer_crm: None,
+        split_cash: String::new(),
+        split_upi: String::new(),
+        split_card: String::new(),
+        split_field: 0,
+        kds_kots: Vec::new(),
+        kds_index: 0,
+        sales_analytics: None,
+        printer_config: dinein_takeout_billing::printer::PrinterConfig::default(),
     };
     (app, database_path)
 }
@@ -964,4 +975,338 @@ fn generalized_box_switching_by_number() {
     assert!(text.contains("[7]"), "UI should show Box [7]");
 
     let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn pos_advanced_delta_kots_and_reprints() {
+    let (mut app, database_path) = fixture();
+    app.focus = Focus::Tables;
+    app.handle_key(KeyCode::Enter); // Open T1
+
+    // Add Samosa (qty 2)
+    app.focus = Focus::Menu;
+    app.menu_index = 0;
+    app.handle_key(KeyCode::Enter);
+    app.handle_key(KeyCode::Enter);
+    assert_eq!(app.order().cart[0].qty, 2);
+    assert_eq!(app.order().cart[0].kot_sent_qty, 0);
+
+    // Generate 1st KOT
+    app.focus = Focus::Cart;
+    app.handle_key(KeyCode::Char('k'));
+    assert_eq!(app.order().cart[0].kot_sent_qty, 2);
+    assert_eq!(app.order().kot_sent_count, 1);
+    assert_eq!(app.recent_kots.len(), 1);
+    assert!(!app.recent_kots[0].is_reprint);
+
+    // Add Paneer Curry (qty 1) and increase Samosa to 3
+    app.focus = Focus::Menu;
+    app.menu_index = 1;
+    app.handle_key(KeyCode::Enter); // Paneer Curry
+    app.menu_index = 0;
+    app.handle_key(KeyCode::Enter); // Samosa qty + 1 = 3
+
+    assert_eq!(app.order().cart.len(), 2);
+    assert_eq!(app.order().cart[0].qty, 3);
+    assert_eq!(app.order().cart[0].kot_sent_qty, 2); // 1 delta unsent
+    assert_eq!(app.order().cart[1].qty, 1);
+    assert_eq!(app.order().cart[1].kot_sent_qty, 0); // 1 delta unsent
+
+    // Fire delta KOT
+    app.focus = Focus::Cart;
+    app.handle_key(KeyCode::Char('k'));
+    assert_eq!(app.order().cart[0].kot_sent_qty, 3);
+    assert_eq!(app.order().cart[1].kot_sent_qty, 1);
+    assert_eq!(app.order().kot_sent_count, 2);
+    assert_eq!(app.recent_kots.len(), 2);
+    assert!(
+        app.recent_kots[0].ticket_text.contains("DELTA")
+            || app.recent_kots[0].ticket_text.contains("ADD-ON")
+    );
+
+    // Full reprint via Shift+K
+    app.handle_key(KeyCode::Char('K'));
+    assert_eq!(app.recent_kots.len(), 3);
+    assert!(app.recent_kots[0].is_reprint);
+    assert!(app.recent_kots[0].ticket_text.contains("REPRINT"));
+
+    let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn pos_advanced_kds_workflow() {
+    let (mut app, database_path) = fixture();
+    app.focus = Focus::Tables;
+    app.handle_key(KeyCode::Enter); // Open T1
+
+    app.focus = Focus::Menu;
+    app.handle_key(KeyCode::Enter); // Samosa
+    app.focus = Focus::Cart;
+    app.handle_key(KeyCode::Char('k')); // Send KOT
+
+    // Open KDS
+    app.open_kds();
+    assert_eq!(app.focus, Focus::KitchenDisplay);
+    assert_eq!(app.kds_kots.len(), 1);
+    assert_eq!(app.kds_kots[0].status, "PENDING");
+
+    // Bump status: PENDING -> PREPARING
+    app.handle_key(KeyCode::Enter);
+    assert_eq!(app.kds_kots[0].status, "PREPARING");
+
+    // Bump status: PREPARING -> READY
+    app.handle_key(KeyCode::Enter);
+    assert_eq!(app.kds_kots[0].status, "READY");
+
+    // Bump status: READY -> SERVED
+    app.handle_key(KeyCode::Enter);
+    assert_eq!(app.kds_kots[0].status, "SERVED");
+
+    // Exit KDS
+    app.handle_key(KeyCode::Esc);
+    assert_ne!(app.focus, Focus::KitchenDisplay);
+
+    let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn pos_advanced_split_payment_flow() {
+    let (mut app, database_path) = fixture();
+    app.offers.clear();
+    app.focus = Focus::Tables;
+    app.handle_key(KeyCode::Enter); // Open T1
+
+    // Add items
+    app.focus = Focus::Menu;
+    app.menu_index = 1; // Paneer Curry: 100.0 + 5% GST = 105.0
+    app.handle_key(KeyCode::Enter);
+
+    let total = app.order().totals().total;
+    assert!(total > 100.0);
+
+    // Complete initial billing
+    app.complete_billing("", None);
+    assert_eq!(app.order().status, OrderStatus::Paid);
+
+    // Open payment mode modal
+    app.handle_key(KeyCode::Char('p'));
+    assert_eq!(app.focus, Focus::PaymentMode);
+
+    // Choose Split payment (shortcut 's' or '4')
+    app.handle_key(KeyCode::Char('s'));
+    assert_eq!(app.focus, Focus::SplitPayment);
+
+    // Split field 0 (Cash): Enter "50"
+    app.handle_key(KeyCode::Char('5'));
+    app.handle_key(KeyCode::Char('0'));
+    assert_eq!(app.split_cash, "50");
+
+    // Tab to UPI field (index 1): Press 'a' to auto-fill remaining balance
+    app.handle_key(KeyCode::Tab);
+    assert_eq!(app.split_field, 1);
+    app.handle_key(KeyCode::Char('a'));
+    let (_, cash, upi, card) = app.split_payment_totals();
+    assert_eq!(cash, 50.0);
+    assert!((cash + upi + card - total).abs() < 0.05);
+
+    // Confirm split payment
+    app.handle_key(KeyCode::Enter);
+    assert_eq!(app.order().status, OrderStatus::Paid);
+    assert_eq!(app.order().payment_mode, Some(PaymentMode::Split));
+
+    let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn pos_advanced_category_filtering() {
+    let (mut app, database_path) = fixture();
+    // Setup 2 different categories
+    app.items = vec![
+        MenuItem::new("Starters", "Samosa", "1 pc", 20.0),
+        MenuItem::new("Starters", "Vada Pav", "1 pc", 25.0),
+        MenuItem::new("Mains", "Dal Makhani", "plate", 120.0),
+        MenuItem::new("Mains", "Paneer Kadai", "plate", 150.0),
+        MenuItem::new("Desserts", "Gulab Jamun", "2 pcs", 40.0),
+    ];
+    app.categories = vec![
+        "ALL".to_string(),
+        "Starters".to_string(),
+        "Mains".to_string(),
+        "Desserts".to_string(),
+    ];
+    app.selected_category_index = 0;
+
+    // With "ALL" selected, all 5 items visible
+    assert_eq!(app.visible_items().len(), 5);
+
+    // Switch to Starters (category 1)
+    app.focus = Focus::Menu;
+    app.handle_key(KeyCode::Right);
+    assert_eq!(app.selected_category_index, 1);
+    assert_eq!(app.visible_items().len(), 2);
+    assert_eq!(app.items[app.visible_items()[0]].name, "Samosa");
+    assert_eq!(app.items[app.visible_items()[1]].name, "Vada Pav");
+
+    // Switch to Mains (category 2)
+    app.handle_key(KeyCode::Right);
+    assert_eq!(app.selected_category_index, 2);
+    assert_eq!(app.visible_items().len(), 2);
+    assert_eq!(app.items[app.visible_items()[0]].name, "Dal Makhani");
+
+    // Switch back to Starters via Left
+    app.handle_key(KeyCode::Left);
+    assert_eq!(app.selected_category_index, 1);
+    assert_eq!(app.visible_items().len(), 2);
+
+    let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn pos_advanced_complimentary_and_discount_items() {
+    let (mut app, database_path) = fixture();
+    app.focus = Focus::Tables;
+    app.handle_key(KeyCode::Enter); // Open T1
+
+    // Add Paneer Curry (100.0)
+    app.focus = Focus::Menu;
+    app.menu_index = 1;
+    app.handle_key(KeyCode::Enter);
+
+    app.focus = Focus::Cart;
+    assert_eq!(app.order().cart[0].total(), 100.0);
+
+    // Toggle Complimentary (NC)
+    app.handle_key(KeyCode::Char('c'));
+    assert!(app.order().cart[0].is_complimentary);
+    assert_eq!(app.order().cart[0].total(), 0.0);
+
+    // Toggle off NC
+    app.handle_key(KeyCode::Char('c'));
+    assert!(!app.order().cart[0].is_complimentary);
+    assert_eq!(app.order().cart[0].total(), 100.0);
+
+    // Cycle discounts: 0% -> 10% -> 20% -> 50% -> 100% -> 0%
+    app.handle_key(KeyCode::Char('d'));
+    assert_eq!(app.order().cart[0].discount_percent, 10.0);
+    assert_eq!(app.order().cart[0].total(), 90.0);
+
+    app.handle_key(KeyCode::Char('d'));
+    assert_eq!(app.order().cart[0].discount_percent, 20.0);
+    assert_eq!(app.order().cart[0].total(), 80.0);
+
+    app.handle_key(KeyCode::Char('d'));
+    assert_eq!(app.order().cart[0].discount_percent, 50.0);
+    assert_eq!(app.order().cart[0].total(), 50.0);
+
+    app.handle_key(KeyCode::Char('d'));
+    assert_eq!(app.order().cart[0].discount_percent, 100.0);
+    assert_eq!(app.order().cart[0].total(), 0.0);
+
+    app.handle_key(KeyCode::Char('d'));
+    assert_eq!(app.order().cart[0].discount_percent, 0.0);
+    assert_eq!(app.order().cart[0].total(), 100.0);
+
+    // Clear cart via Shift+C
+    app.handle_key(KeyCode::Char('C'));
+    assert!(app.order().cart.is_empty());
+
+    let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn pos_advanced_customer_crm_profile() {
+    let (mut app, database_path) = fixture();
+    app.offers.clear();
+    app.focus = Focus::Tables;
+    app.handle_key(KeyCode::Enter); // Open T1
+
+    app.focus = Focus::Menu;
+    app.handle_key(KeyCode::Enter); // Samosa
+
+    // Complete billing for customer 9876543210
+    app.focus = Focus::Cart;
+    app.handle_key(KeyCode::Char('p'));
+    for digit in "9876543210".chars() {
+        app.handle_key(KeyCode::Char(digit));
+    }
+    app.handle_key(KeyCode::Enter); // Enter payment mode
+    app.handle_key(KeyCode::Char('c')); // Cash
+
+    // Now start a second order for the same customer
+    app.focus = Focus::Tables;
+    app.selected_table_index = 1;
+    app.handle_key(KeyCode::Enter); // Open T2
+
+    app.focus = Focus::Menu;
+    app.handle_key(KeyCode::Enter); // Samosa
+
+    app.focus = Focus::Cart;
+    app.handle_key(KeyCode::Char('p')); // Open MobileEntry
+
+    for digit in "9876543210".chars() {
+        app.handle_key(KeyCode::Char(digit));
+    }
+
+    assert!(app.customer_crm.is_some());
+    let crm = app.customer_crm.as_ref().unwrap();
+    assert_eq!(crm.phone, "9876543210");
+    assert_eq!(crm.visit_count, 1);
+    assert!(crm.total_spent > 0.0);
+    assert!(crm.favorite_items.iter().any(|(name, _)| name == "Samosa"));
+
+    let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn pos_advanced_sales_analytics_modal() {
+    let (mut app, database_path) = fixture();
+    app.offers.clear();
+    app.focus = Focus::Tables;
+    app.handle_key(KeyCode::Enter);
+
+    app.focus = Focus::Menu;
+    app.handle_key(KeyCode::Enter);
+
+    // Pay bill
+    app.complete_billing("", None);
+    app.handle_key(KeyCode::Char('p'));
+    app.handle_key(KeyCode::Char('c'));
+
+    // Open sales analytics via 'A'
+    app.handle_key(KeyCode::Char('A'));
+    assert_eq!(app.focus, Focus::Analytics);
+    assert!(app.sales_analytics.is_some());
+
+    let a = app.sales_analytics.as_ref().unwrap();
+    assert_eq!(a.total_orders, 1);
+    assert!(a.net_sales > 0.0);
+    assert_eq!(a.payment_breakdown[0].0, "CASH");
+    assert_eq!(a.top_items[0].0, "Samosa");
+
+    // Close analytics
+    app.handle_key(KeyCode::Esc);
+    assert_ne!(app.focus, Focus::Analytics);
+
+    let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn pos_advanced_backup_retention_purge() {
+    let temp_dir = std::env::temp_dir().join(format!("backup_purge_test_{}", std::process::id()));
+    let _ = fs::create_dir_all(&temp_dir);
+
+    // Create a fresh backup file
+    let fresh_file = temp_dir.join("billing_2026-09-14.db");
+    fs::write(&fresh_file, b"fresh backup data").unwrap();
+
+    // Create an old backup file older than 30 days
+    let old_file = temp_dir.join("billing_2026-07-01.db");
+    fs::write(&old_file, b"old backup data").unwrap();
+
+    let purged = Database::purge_old_backups(&temp_dir, 30);
+    assert_eq!(purged, 1);
+    assert!(!old_file.exists());
+    assert!(fresh_file.exists());
+
+    let _ = fs::remove_dir_all(temp_dir);
 }

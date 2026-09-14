@@ -21,6 +21,13 @@ pub fn render_footer(f: &mut Frame, app: &App, area: Rect) {
             ),
             Span::raw("Box  "),
             Span::styled(
+                "[←/→] ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Cat  "),
+            Span::styled(
                 "[Enter] ",
                 Style::default()
                     .fg(Color::Yellow)
@@ -56,12 +63,12 @@ pub fn render_footer(f: &mut Frame, app: &App, area: Rect) {
             ),
             Span::raw("Z-Report  "),
             Span::styled(
-                "[K] ",
+                "[A] ",
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw("KOT  "),
+            Span::raw("Analytics  "),
             Span::styled(
                 "[?] ",
                 Style::default()
@@ -86,12 +93,26 @@ pub fn render_footer(f: &mut Frame, app: &App, area: Rect) {
             ),
             Span::raw("Qty  "),
             Span::styled(
-                "[x] ",
+                "[c] ",
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw("Remove  "),
+            Span::raw("NC  "),
+            Span::styled(
+                "[d] ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Disc  "),
+            Span::styled(
+                "[k/K] ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("KOT  "),
             Span::styled(
                 "[n] ",
                 Style::default()
@@ -100,12 +121,12 @@ pub fn render_footer(f: &mut Frame, app: &App, area: Rect) {
             ),
             Span::raw("Note  "),
             Span::styled(
-                "[k] ",
+                "[x] ",
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw("KOT  "),
+            Span::raw("Del  "),
             Span::styled(
                 "[p] ",
                 Style::default()
@@ -114,12 +135,12 @@ pub fn render_footer(f: &mut Frame, app: &App, area: Rect) {
             ),
             Span::raw("Bill  "),
             Span::styled(
-                "[z] ",
+                "[A] ",
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw("Z-Report  "),
+            Span::raw("Analytics  "),
             Span::styled(
                 "[?] ",
                 Style::default()
@@ -216,12 +237,26 @@ pub fn render_footer(f: &mut Frame, app: &App, area: Rect) {
             ),
             Span::raw("Reprint  "),
             Span::styled(
+                "[K] ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("KDS  "),
+            Span::styled(
                 "[/] ",
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("Search  "),
+            Span::styled(
+                "[A] ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Analytics  "),
             Span::styled(
                 "[z] ",
                 Style::default()

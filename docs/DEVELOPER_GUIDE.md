@@ -81,6 +81,7 @@ DineInTakeOut/
 │   ├── models.rs             # Domain structs, enums, financial calculations
 │   ├── app.rs                # Central state container, key handlers, business logic
 │   ├── db.rs                 # Embedded Turso SQLite persistence layer
+│   ├── printer.rs            # Direct ESC/POS thermal driver & peripheral routing
 │   ├── receipts.rs           # Receipt layout formatting & CUPS integration
 │   ├── config.rs             # Default fixtures, CSV import/export engines
 │   └── ui/                   # Ratatui rendering components
@@ -88,14 +89,16 @@ DineInTakeOut/
 │       ├── floor_plan.rs     # Dining area tabs & table card grid
 │       ├── table_info.rs     # Table details panel & interactive table search/jump
 │       ├── search.rs         # Fuzzy menu search input
-│       ├── menu.rs           # Menu catalogue table
-│       ├── bill.rs           # Active cart lines & financial breakdown
-│       ├── recent_bills.rs   # Recent completed bills panel
-│       ├── modals.rs         # Mobile entry, offer pick, and payment mode popups
+│       ├── menu.rs           # Menu catalogue table & category pill bar
+│       ├── bill.rs           # Active cart lines & financial breakdown (NC, disc, KOT tags)
+│       ├── recent_bills.rs   # Recent completed bills & KOT tickets panel
+│       ├── kds.rs            # Kitchen Display System (KDS) live order monitor
+│       ├── analytics.rs      # End-of-Day Sales & Tax Analytics dashboard
+│       ├── modals.rs         # Mobile entry (with CRM), offer pick, split tender, and payment modals
 │       ├── notifications.rs  # Status message banner
 │       └── footer.rs         # Contextual keybinding helper bar
 └── tests/
-    └── integration_smoke.rs  # End-to-end integration test suite
+    └── integration_smoke.rs  # End-to-end integration test suite (27 integration tests)
 ```
 
 ---
@@ -240,20 +243,36 @@ Every functional container in the TUI is identified by an index number rendered 
 - **`[1]` Floor Plan** (`ui/floor_plan.rs`): Tables and area lifecycle cards (`Focus::Tables`).
 - **`[2]` Table Details / Jump** (`ui/table_info.rs`): Active table specs and live search input (`Focus::TableJump`).
 - **`[3]` Menu Search** (`ui/search.rs`): Fuzzy item filter bar (`Focus::Search`).
-- **`[4]` Menu Catalogue** (`ui/menu.rs`): Categorized dish listings with stock availability (`Focus::Menu`).
-- **`[5]` Bill & Cart** (`ui/bill.rs`): Active order cart lines, totals, and historical receipt preview (`Focus::Cart`).
+- **`[4]` Menu Catalogue** (`ui/menu.rs`): Categorized dish listings with category pill bar (`◀ [ ALL ] [ Starters ] [ Mains ] ▶`) and stock availability (`Focus::Menu`).
+- **`[5]` Bill & Cart** (`ui/bill.rs`): Active order cart lines, totals, complimentary (`[NC]`), discount (`[-10%]`), KOT status (`[KOT]`), and historical receipt preview (`Focus::Cart`).
 - **`[6]` Recent Bills** (`ui/recent_bills.rs`): Latest settled checks log (`Focus::RecentBills`, `RecentTab::Bills`).
 - **`[7]` KOT Bills** (`ui/recent_bills.rs`): Latest kitchen order tickets log (`Focus::RecentBills`, `RecentTab::Kots`).
 
 `App::switch_to_box(box_num: u8)` handles zero-latency navigation when digit keys `1`–`7` are pressed across all non-modal views.
 
-### Modal Views (`ui/modals.rs`)
-- `render_daily_report`: Formatted Z-Report table with sales breakdown and payment metrics.
-- `render_bill_search`: Filtered historical order table with customer mobile and reprint prompt.
-- `render_upi_qr`: High-contrast Unicode half-block QR display with VPA and total amount.
-- `render_table_move`: Table destination selector distinguishing `[MOVE]` (free table) and `[MERGE]` (occupied table).
-- `render_item_note`: Live text buffer for cooking instructions.
-- All modal dialogs use `Clear` widgets before drawing borders to prevent background content bleed-through.
+### Specialized Screens & Modals
+- **Kitchen Display System (`ui/kds.rs`)**: Fullscreen live kitchen order monitor (`Focus::KitchenDisplay`, hotkey `K` / `F7`) with color-coded preparation timers (<10m Green, 10-20m Amber, >20m Urgent Red) and ticket status bumping (`PENDING` ➔ `PREPARING` ➔ `READY` ➔ `SERVED`) via `Space` / `Enter`.
+- **Sales & Tax Analytics Dashboard (`ui/analytics.rs`)**: Full-screen modal dashboard (`Focus::Analytics`, hotkey `A` / `F8`) rendering 4 KPI cards (Net Revenue, Total Orders, GST Collected with CGST/SGST split, Discounts Given), payment tender distribution table, and top 5 best-selling items with ASCII trend volume bars.
+- **Split Payment Tender Modal (`ui/modals.rs`)**: Mixed settlement modal (`Focus::SplitPayment`, hotkey `4` / `s` in payment mode) with real-time balance calculations, Cash / UPI / Card fields, and one-key balance auto-fill (`a`).
+- **Customer CRM Profile in Mobile Entry (`ui/modals.rs`)**: Automatically queries customer history upon entering 4+ digits, rendering a VIP membership banner showing lifetime visits, total spend, and favorite dishes.
+- **Daily Report (Z-Report)**: Formatted Z-Report table with sales breakdown and payment metrics.
+- **Bill Search**: Filtered historical order table with customer mobile and reprint prompt.
+- **Dynamic UPI QR Code**: High-contrast Unicode half-block QR display with VPA and total amount.
+- **Table Move & Merge**: Table destination selector distinguishing `[MOVE]` (free table) and `[MERGE]` (occupied table).
+- **Item Cooking Notes**: Live text buffer for kitchen preparation instructions.
+
+---
+
+## 7. Direct ESC/POS Thermal Printing & Routing (`printer.rs`)
+
+The `printer` module provides a native ESC/POS thermal printing engine independent of external text file writes:
+- **Command Constants**: Hardware initialization (`ESC @`), text alignment (Left, Center, Right), text bolding/double-height, paper cutting (`GS V 66 0`), and cash drawer kick (`ESC p 0 25 250`).
+- **Receipt & KOT Builders**: `build_escpos_receipt` and `build_escpos_kot` generate standardized 42-column ESC/POS byte streams including item notes, complimentary badges, discounts, and delta KOT add-on headers.
+- **Peripheral Routing**: Sourced from `config.csv` (`printer_mode`, `receipt_printer`, `kot_printer`, `drawer_kick_on_cash`):
+  - `Lpr`: Spools directly via system CUPS (`lp -d <printer>`).
+  - `Device`: Directly writes raw bytes to character device paths (e.g. `/dev/usb/lp0`, `/dev/ttyUSB0`).
+  - `Network`: Streams raw bytes over TCP socket to network receipt printers (e.g. `192.168.1.100:9100`).
+  - `Simulated`: Writes raw `.bin` byte dumps and formatted `.txt` files to `bills/` for testing without hardware.
 
 ---
 

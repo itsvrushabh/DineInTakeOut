@@ -93,6 +93,11 @@ pub fn render_bill(f: &mut Frame, app: &App, area: Rect) {
                 order.service.label()
             )
         }
+    } else if app.focus == Focus::Cart {
+        format!(
+            " [5] Cart #{} (c: NC · d: disc · +/-: qty · n: note · k: KOT) ",
+            order.id
+        )
     } else if bill_ready {
         format!(
             " [5] Bill #{} — READY FOR BILL ⏳ ({} / {}) ",
@@ -207,16 +212,46 @@ pub fn render_bill(f: &mut Frame, app: &App, area: Rect) {
         .map(|(i, line)| {
             let selected = i == order.cart_index && app.focus == Focus::Cart;
             let has_note = line.note.is_some();
+            let mut name_spans = vec![Span::raw(line.name.clone())];
+            if line.is_complimentary {
+                name_spans.push(Span::raw(" "));
+                name_spans.push(Span::styled(
+                    "[NC]",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            } else if line.discount_percent > 0.0 {
+                name_spans.push(Span::raw(" "));
+                name_spans.push(Span::styled(
+                    format!("[-{:.0}%]", line.discount_percent),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+            if line.kot_sent_qty > 0 {
+                name_spans.push(Span::raw(" "));
+                if line.kot_sent_qty < line.qty {
+                    name_spans.push(Span::styled(
+                        format!("[KOT {}/{}]", line.kot_sent_qty, line.qty),
+                        Style::default().fg(Color::Cyan),
+                    ));
+                } else {
+                    name_spans.push(Span::styled("[KOT]", Style::default().fg(Color::DarkGray)));
+                }
+            }
+
             let item_cell = if let Some(note) = &line.note {
                 Cell::from(Text::from(vec![
-                    Line::from(line.name.clone()),
+                    Line::from(name_spans),
                     Line::from(Span::styled(
                         format!("  ↳ {note}"),
                         Style::default().fg(Color::Yellow),
                     )),
                 ]))
             } else {
-                Cell::from(line.name.clone())
+                Cell::from(Line::from(name_spans))
             };
             Row::new(vec![
                 item_cell,

@@ -14,9 +14,9 @@ use tokio::sync::Mutex;
 use turso::{Connection, Row, Value};
 
 use crate::models::{
-    Area, BillSummary, BillTotals, CartLine, DailySalesSummary, HistoricalBill, KotSummary,
-    MenuItem, Offer, Order, OrderStatus, PaymentMode, PhysicalTable, Service, TableStatus,
-    CLEANING_MINUTES,
+    Area, BillSummary, BillTotals, CartLine, CustomerCrmProfile, DailySalesSummary, HistoricalBill,
+    KotSummary, MenuItem, Offer, Order, OrderStatus, PaymentMode, PhysicalTable, SalesAnalytics,
+    Service, TableStatus, CLEANING_MINUTES,
 };
 
 const TIMESTAMP_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
@@ -46,13 +46,15 @@ const SCHEMA: [&str; 11] = [
          created_at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
      )",
     "CREATE TABLE IF NOT EXISTS order_items (
-         id         INTEGER PRIMARY KEY AUTOINCREMENT,
-         order_id   INTEGER NOT NULL REFERENCES orders(id),
-         name       TEXT NOT NULL,
-         unit_price REAL NOT NULL,
-         qty        INTEGER NOT NULL CHECK (qty > 0),
-         line_total REAL NOT NULL,
-         notes      TEXT NOT NULL DEFAULT ''
+         id               INTEGER PRIMARY KEY AUTOINCREMENT,
+         order_id         INTEGER NOT NULL REFERENCES orders(id),
+         name             TEXT NOT NULL,
+         unit_price       REAL NOT NULL,
+         qty              INTEGER NOT NULL CHECK (qty > 0),
+         line_total       REAL NOT NULL,
+         notes            TEXT NOT NULL DEFAULT '',
+         is_nc            INTEGER NOT NULL DEFAULT 0,
+         discount_percent REAL NOT NULL DEFAULT 0
      )",
     "CREATE TABLE IF NOT EXISTS open_orders (
          id           INTEGER PRIMARY KEY,
@@ -65,12 +67,15 @@ const SCHEMA: [&str; 11] = [
          status       TEXT NOT NULL
      )",
     "CREATE TABLE IF NOT EXISTS open_order_items (
-         order_id   INTEGER NOT NULL REFERENCES open_orders(id) ON DELETE CASCADE,
-         position   INTEGER NOT NULL,
-         name       TEXT NOT NULL,
-         unit_price REAL NOT NULL,
-         qty        INTEGER NOT NULL CHECK (qty > 0),
-         notes      TEXT NOT NULL DEFAULT '',
+         order_id         INTEGER NOT NULL REFERENCES open_orders(id) ON DELETE CASCADE,
+         position         INTEGER NOT NULL,
+         name             TEXT NOT NULL,
+         unit_price       REAL NOT NULL,
+         qty              INTEGER NOT NULL CHECK (qty > 0),
+         notes            TEXT NOT NULL DEFAULT '',
+         kot_sent_qty     INTEGER NOT NULL DEFAULT 0,
+         is_nc            INTEGER NOT NULL DEFAULT 0,
+         discount_percent REAL NOT NULL DEFAULT 0,
          PRIMARY KEY (order_id, position)
      )",
     "CREATE TABLE IF NOT EXISTS tables (
@@ -104,7 +109,8 @@ const SCHEMA: [&str; 11] = [
          item_count  INTEGER NOT NULL DEFAULT 0,
          ticket_text TEXT NOT NULL,
          is_reprint  INTEGER NOT NULL DEFAULT 0,
-         created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+         created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+         status      TEXT NOT NULL DEFAULT 'PENDING'
      )",
     "CREATE TABLE IF NOT EXISTS z_reports (
          id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,6 +168,36 @@ impl Database {
         if !backup_file.exists() {
             let _ = std::fs::copy(path, backup_file);
         }
+        // Purge backups older than 30 days
+        Self::purge_old_backups(&backup_dir, 30);
+    }
+
+    /// Purges SQLite backup files in `backup_dir` older than `retention_days`.
+    pub fn purge_old_backups(backup_dir: &Path, retention_days: u32) -> usize {
+        if !backup_dir.exists() || retention_days == 0 {
+            return 0;
+        }
+        let cutoff = chrono::Local::now() - chrono::Duration::days(retention_days as i64);
+        let cutoff_str = cutoff.format("%Y-%m-%d").to_string();
+
+        let mut purged = 0;
+        if let Ok(entries) = std::fs::read_dir(backup_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                    if file_name.starts_with("billing_") && file_name.ends_with(".db") {
+                        let date_part = &file_name[8..file_name.len() - 3];
+                        if date_part.len() == 10
+                            && date_part < cutoff_str.as_str()
+                            && std::fs::remove_file(&path).is_ok()
+                        {
+                            purged += 1;
+                        }
+                    }
+                }
+            }
+        }
+        purged
     }
 
     fn runtime() -> Result<Runtime, String> {
@@ -232,6 +268,42 @@ impl Database {
             let _ = conn
                 .execute(
                     "ALTER TABLE open_order_items ADD COLUMN notes TEXT NOT NULL DEFAULT ''",
+                    (),
+                )
+                .await;
+            let _ = conn
+                .execute(
+                    "ALTER TABLE open_order_items ADD COLUMN kot_sent_qty INTEGER NOT NULL DEFAULT 0",
+                    (),
+                )
+                .await;
+            let _ = conn
+                .execute(
+                    "ALTER TABLE open_order_items ADD COLUMN is_nc INTEGER NOT NULL DEFAULT 0",
+                    (),
+                )
+                .await;
+            let _ = conn
+                .execute(
+                    "ALTER TABLE open_order_items ADD COLUMN discount_percent REAL NOT NULL DEFAULT 0",
+                    (),
+                )
+                .await;
+            let _ = conn
+                .execute(
+                    "ALTER TABLE order_items ADD COLUMN is_nc INTEGER NOT NULL DEFAULT 0",
+                    (),
+                )
+                .await;
+            let _ = conn
+                .execute(
+                    "ALTER TABLE order_items ADD COLUMN discount_percent REAL NOT NULL DEFAULT 0",
+                    (),
+                )
+                .await;
+            let _ = conn
+                .execute(
+                    "ALTER TABLE kots ADD COLUMN status TEXT NOT NULL DEFAULT 'PENDING'",
                     (),
                 )
                 .await;
@@ -548,8 +620,8 @@ impl Database {
 
             for line in &order.cart {
                 tx.execute(
-                    "INSERT INTO order_items (order_id, name, unit_price, qty, line_total, notes)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    "INSERT INTO order_items (order_id, name, unit_price, qty, line_total, notes, is_nc, discount_percent)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     (
                         i64::from(order.id),
                         line.name.clone(),
@@ -557,6 +629,8 @@ impl Database {
                         i64::from(line.qty),
                         line.total(),
                         line.note.as_deref().unwrap_or(""),
+                        line.is_complimentary as i64,
+                        line.discount_percent,
                     ),
                 )
                 .await
@@ -614,8 +688,8 @@ impl Database {
             .map_err(|e| e.to_string())?;
             for (position, line) in order.cart.iter().enumerate() {
                 tx.execute(
-                    "INSERT INTO open_order_items (order_id, position, name, unit_price, qty, notes)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    "INSERT INTO open_order_items (order_id, position, name, unit_price, qty, notes, kot_sent_qty, is_nc, discount_percent)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                     (
                         i64::from(order.id),
                         position as i64,
@@ -623,6 +697,9 @@ impl Database {
                         line.unit_price,
                         i64::from(line.qty),
                         line.note.as_deref().unwrap_or(""),
+                        i64::from(line.kot_sent_qty),
+                        line.is_complimentary as i64,
+                        line.discount_percent,
                     ),
                 )
                 .await
@@ -696,7 +773,8 @@ impl Database {
                 let mut cart = Vec::new();
                 if let Ok(mut item_rows) = conn
                     .query(
-                        "SELECT name, unit_price, qty, notes FROM open_order_items
+                        "SELECT name, unit_price, qty, notes, kot_sent_qty, is_nc, discount_percent
+                         FROM open_order_items
                          WHERE order_id = ?1 ORDER BY position",
                         [i64::from(header.id)],
                     )
@@ -713,6 +791,9 @@ impl Database {
                             } else {
                                 Some(note_str)
                             },
+                            kot_sent_qty: row_i64(&item, 4) as u32,
+                            is_complimentary: row_i64(&item, 5) != 0,
+                            discount_percent: row_f64(&item, 6),
                         });
                     }
                 }
@@ -791,6 +872,10 @@ impl Database {
                             Some(PaymentMode::Card) => {
                                 summary.card_count += 1;
                                 summary.card_total += total;
+                            }
+                            Some(PaymentMode::Split) => {
+                                summary.split_count += 1;
+                                summary.split_total += total;
                             }
                             Some(PaymentMode::PersonCredit) => {
                                 summary.person_credit_count += 1;
@@ -917,7 +1002,7 @@ impl Database {
 
             let mut item_rows = conn
                 .query(
-                    "SELECT name, unit_price, qty, notes FROM order_items WHERE order_id = ?1 ORDER BY id",
+                    "SELECT name, unit_price, qty, notes, is_nc, discount_percent FROM order_items WHERE order_id = ?1 ORDER BY id",
                     [i64::from(order_id)],
                 )
                 .await
@@ -934,6 +1019,9 @@ impl Database {
                     } else {
                         Some(note_str)
                     },
+                    kot_sent_qty: row_i64(&item, 2) as u32,
+                    is_complimentary: row_i64(&item, 4) != 0,
+                    discount_percent: row_f64(&item, 5),
                 });
             }
 
@@ -998,8 +1086,8 @@ impl Database {
         self.rt.block_on(async {
             let conn = self.conn.lock().await;
             conn.execute(
-                "INSERT INTO kots (order_id, label, area, item_count, ticket_text, is_reprint)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO kots (order_id, label, area, item_count, ticket_text, is_reprint, status)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'PENDING')",
                 (
                     i64::from(order_id),
                     label,
@@ -1024,13 +1112,61 @@ impl Database {
         })
     }
 
+    /// Updates the prep/serving status of a KOT ("PENDING", "PREPARING", "READY", "SERVED").
+    pub fn update_kot_status(&self, id: u32, status: &str) -> Result<(), String> {
+        self.rt.block_on(async {
+            let conn = self.conn.lock().await;
+            conn.execute(
+                "UPDATE kots SET status = ?1 WHERE id = ?2",
+                (status, i64::from(id)),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+        })
+    }
+
+    /// Loads active KOTs for the Kitchen Display System (all not yet SERVED, newest first).
+    pub fn load_active_kots(&self) -> Vec<KotSummary> {
+        self.rt.block_on(async {
+            let conn = self.conn.lock().await;
+            let mut rows = match conn
+                .query(
+                    "SELECT id, order_id, label, area, item_count, ticket_text, is_reprint, created_at, status
+                     FROM kots WHERE status != 'SERVED' ORDER BY id DESC LIMIT 50",
+                    (),
+                )
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => return Vec::new(),
+            };
+
+            let mut kots = Vec::new();
+            while let Ok(Some(row)) = rows.next().await {
+                kots.push(KotSummary {
+                    id: row_i64(&row, 0) as u32,
+                    order_id: row_i64(&row, 1) as u32,
+                    label: row_string(&row, 2),
+                    area: row_string(&row, 3),
+                    item_count: row_i64(&row, 4) as u32,
+                    ticket_text: row_string(&row, 5),
+                    is_reprint: row_i64(&row, 6) != 0,
+                    created_at: row_string(&row, 7),
+                    status: row_string(&row, 8),
+                });
+            }
+            kots
+        })
+    }
+
     /// Loads the most recent kitchen order tickets (newest first, up to 10).
     pub fn load_recent_kots(&self) -> Vec<KotSummary> {
         self.rt.block_on(async {
             let conn = self.conn.lock().await;
             let mut rows = match conn
                 .query(
-                    "SELECT id, order_id, label, area, item_count, ticket_text, is_reprint, created_at
+                    "SELECT id, order_id, label, area, item_count, ticket_text, is_reprint, created_at, status
                      FROM kots ORDER BY id DESC LIMIT 10",
                     (),
                 )
@@ -1051,9 +1187,149 @@ impl Database {
                     ticket_text: row_string(&row, 5),
                     is_reprint: row_i64(&row, 6) != 0,
                     created_at: row_string(&row, 7),
+                    status: row_string(&row, 8),
                 });
             }
             kots
+        })
+    }
+
+    /// Fetches customer CRM profile including lifetime visits, spend, and favorites.
+    pub fn get_customer_crm_profile(&self, phone: &str) -> CustomerCrmProfile {
+        let phone = phone.trim();
+        if phone.is_empty() {
+            return CustomerCrmProfile::default();
+        }
+        self.rt.block_on(async {
+            let conn = self.conn.lock().await;
+            let mut profile = CustomerCrmProfile {
+                phone: phone.to_string(),
+                ..Default::default()
+            };
+
+            if let Ok(mut rows) = conn
+                .query(
+                    "SELECT COUNT(id), COALESCE(SUM(total), 0.0), MAX(created_at)
+                     FROM orders WHERE customer_mobile = ?1",
+                    [phone],
+                )
+                .await
+            {
+                if let Ok(Some(row)) = rows.next().await {
+                    profile.visit_count = row_i64(&row, 0) as usize;
+                    profile.total_spent = row_f64(&row, 1);
+                    let last = row_string(&row, 2);
+                    if !last.is_empty() {
+                        profile.last_visit = Some(last);
+                    }
+                }
+            }
+
+            if let Ok(mut item_rows) = conn
+                .query(
+                    "SELECT oi.name, SUM(oi.qty) as total_qty
+                     FROM order_items oi
+                     JOIN orders o ON o.id = oi.order_id
+                     WHERE o.customer_mobile = ?1
+                     GROUP BY oi.name
+                     ORDER BY total_qty DESC LIMIT 3",
+                    [phone],
+                )
+                .await
+            {
+                while let Ok(Some(row)) = item_rows.next().await {
+                    let name = row_string(&row, 0);
+                    let qty = row_i64(&row, 1) as usize;
+                    profile.favorite_items.push((name, qty));
+                }
+            }
+
+            profile
+        })
+    }
+
+    /// Aggregates sales analytics for a specific date (YYYY-MM-DD) or all time if date is empty.
+    pub fn get_sales_analytics(&self, date_prefix: &str) -> SalesAnalytics {
+        self.rt.block_on(async {
+            let conn = self.conn.lock().await;
+            let mut analytics = SalesAnalytics {
+                date: if date_prefix.trim().is_empty() {
+                    chrono::Local::now().format("%Y-%m-%d").to_string()
+                } else {
+                    date_prefix.trim().to_string()
+                },
+                ..Default::default()
+            };
+
+            let filter = if date_prefix.trim().is_empty() {
+                "1=1".to_string()
+            } else {
+                format!("DATE(created_at) = '{}'", date_prefix.trim())
+            };
+
+            // Overall totals
+            let sql = format!(
+                "SELECT COUNT(id), COALESCE(SUM(subtotal), 0.0), COALESCE(SUM(discount), 0.0),
+                        COALESCE(SUM(tax), 0.0), COALESCE(SUM(total), 0.0)
+                 FROM orders WHERE {filter}"
+            );
+            if let Ok(mut rows) = conn.query(&sql, ()).await {
+                if let Ok(Some(row)) = rows.next().await {
+                    analytics.total_orders = row_i64(&row, 0) as usize;
+                    analytics.gross_sales = row_f64(&row, 1);
+                    analytics.total_discounts = row_f64(&row, 2);
+                    analytics.total_tax = row_f64(&row, 3);
+                    analytics.cgst = analytics.total_tax / 2.0;
+                    analytics.sgst = analytics.total_tax / 2.0;
+                    analytics.net_sales = row_f64(&row, 4);
+                    if analytics.total_orders > 0 {
+                        analytics.avg_bill_value =
+                            analytics.net_sales / analytics.total_orders as f64;
+                    }
+                }
+            }
+
+            // Payment breakdown
+            let psql = format!(
+                "SELECT payment_mode, COUNT(id), COALESCE(SUM(total), 0.0)
+                 FROM orders WHERE {filter} GROUP BY payment_mode"
+            );
+            if let Ok(mut rows) = conn.query(&psql, ()).await {
+                while let Ok(Some(row)) = rows.next().await {
+                    let mode = row_string(&row, 0);
+                    let count = row_i64(&row, 1) as usize;
+                    let total = row_f64(&row, 2);
+                    analytics.payment_breakdown.push((
+                        if mode.is_empty() {
+                            "UNSPECIFIED".to_string()
+                        } else {
+                            mode
+                        },
+                        count,
+                        total,
+                    ));
+                }
+            }
+
+            // Top items by quantity
+            let isql = format!(
+                "SELECT oi.name, SUM(oi.qty), SUM(oi.line_total)
+                 FROM order_items oi
+                 JOIN orders o ON o.id = oi.order_id
+                 WHERE {filter}
+                 GROUP BY oi.name
+                 ORDER BY SUM(oi.qty) DESC LIMIT 5"
+            );
+            if let Ok(mut rows) = conn.query(&isql, ()).await {
+                while let Ok(Some(row)) = rows.next().await {
+                    let name = row_string(&row, 0);
+                    let qty = row_i64(&row, 1) as usize;
+                    let total = row_f64(&row, 2);
+                    analytics.top_items.push((name, qty, total));
+                }
+            }
+
+            analytics
         })
     }
 
@@ -1559,5 +1835,44 @@ mod tests {
         let ord = loaded.unwrap();
         assert_eq!(ord.id, 101);
         assert_eq!(ord.cart.len(), 2);
+
+        // Test customer CRM profile
+        let crm = db.get_customer_crm_profile("9998887770");
+        assert_eq!(crm.visit_count, 1);
+        assert!(crm.total_spent > 0.0);
+        assert!(!crm.favorite_items.is_empty());
+
+        // Test Sales Analytics
+        let analytics = db.get_sales_analytics(&today);
+        assert_eq!(analytics.total_orders, 1);
+        assert!(analytics.net_sales > 0.0);
+        assert_eq!(analytics.payment_breakdown.len(), 1);
+        assert_eq!(analytics.payment_breakdown[0].0, "UPI");
+
+        // Test KOT status update and active KOTs loading
+        let kot_id = db
+            .save_kot(101, "T1", "Main Hall", 2, "Test Ticket", false)
+            .unwrap();
+        assert!(kot_id > 0);
+        let active_kots = db.load_active_kots();
+        assert_eq!(active_kots.len(), 1);
+        assert_eq!(active_kots[0].status, "PENDING");
+
+        db.update_kot_status(kot_id, "SERVED").unwrap();
+        let active_after = db.load_active_kots();
+        assert!(active_after.is_empty());
+
+        // Test backup purging
+        let temp_dir = std::env::temp_dir().join(format!("test_backup_purge_{}", kot_id));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let old_file = temp_dir.join("billing_2020-01-01.db");
+        let new_file = temp_dir.join(format!("billing_{today}.db"));
+        let _ = std::fs::write(&old_file, b"test");
+        let _ = std::fs::write(&new_file, b"test");
+        let purged = Database::purge_old_backups(&temp_dir, 30);
+        assert_eq!(purged, 1);
+        assert!(!old_file.exists());
+        assert!(new_file.exists());
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

@@ -1,8 +1,10 @@
 //! User interface layout and rendering orchestration.
 
+pub mod analytics;
 pub mod bill;
 pub mod floor_plan;
 pub mod footer;
+pub mod kds;
 pub mod menu;
 pub mod modals;
 pub mod notifications;
@@ -19,14 +21,16 @@ use crate::{
     app::App,
     models::Focus,
     ui::{
+        analytics::render_analytics,
         bill::render_bill,
         floor_plan::render_tabs,
         footer::render_footer,
+        kds::render_kds,
         menu::render_menu,
         modals::{
             render_bill_search, render_daily_report, render_help, render_item_note,
-            render_mobile_entry, render_offer_select, render_payment_mode, render_table_move,
-            render_upi_qr,
+            render_mobile_entry, render_offer_select, render_payment_mode, render_split_payment,
+            render_table_move, render_upi_qr,
         },
         notifications::render_notification,
         recent_bills::render_recent_bills,
@@ -36,6 +40,11 @@ use crate::{
 };
 
 pub fn ui(f: &mut Frame, app: &App) {
+    if app.focus == Focus::KitchenDisplay {
+        render_kds(f, app);
+        return;
+    }
+
     let compact = f.area().height < 33;
     let tabs_height = (app.areas.len() + 4).clamp(7, 16) as u16;
     let [top_row, search_area, body, recent_bills_area, footer_area, notification_area] =
@@ -102,6 +111,12 @@ pub fn ui(f: &mut Frame, app: &App) {
     }
     if app.focus == Focus::ItemNote {
         render_item_note(f, app);
+    }
+    if app.focus == Focus::SplitPayment {
+        render_split_payment(f, app);
+    }
+    if app.focus == Focus::Analytics {
+        render_analytics(f, app);
     }
     if app.show_help {
         render_help(f, app);
