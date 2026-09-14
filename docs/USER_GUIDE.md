@@ -10,25 +10,30 @@ A comprehensive manual for restaurant managers, cashiers, and waitstaff using th
 2. [Terminal Screen Layout](#2-terminal-screen-layout)
 3. [Navigation Basics](#3-navigation-basics)
 4. [Dine-In Order Workflow](#4-dine-in-order-workflow)
-5. [Take-Out Order Workflow](#5-take-out-order-workflow)
-6. [Cart Management & Item Adjustments](#6-cart-management--item-adjustments)
-7. [Table Search & Quick Jump (`g`)](#7-table-search--quick-jump-g)
-8. [Billing & Customer Mobile Capture (`p` / `b`)](#8-billing--customer-mobile-capture-p--b)
-9. [Applying Discount Offers](#9-applying-discount-offers)
-10. [Payment Modes: UPI, Cash, Card](#10-payment-modes-upi-cash-card)
-11. [Updating Payment Type on Paid Bills](#11-updating-payment-type-on-paid-bills)
-12. [Order Settlement & Table Cleaning](#12-order-settlement--table-cleaning)
-13. [Reviewing Recent Bills (History)](#13-reviewing-recent-bills-history)
-14. [Menu & Configuration Management (CSV `e` / `i`)](#14-menu--configuration-management-csv-e--i)
-15. [Receipt Printing & Local File Storage](#15-receipt-printing--local-file-storage)
-16. [Keyboard Shortcuts Cheat Sheet](#16-keyboard-shortcuts-cheat-sheet)
-17. [Frequently Asked Questions & Troubleshooting](#17-frequently-asked-questions--troubleshooting)
+5. [Table Move, Transfer & Merge (`m`)](#5-table-move-transfer--merge-m)
+6. [Take-Out Order Workflow](#6-take-out-order-workflow)
+7. [Cart Management & Item Notes (`n`)](#7-cart-management--item-notes-n)
+8. [Kitchen Order Tickets (KOT) (`k`)](#8-kitchen-order-tickets-kot-k)
+9. [Menu Item Stock & Out-of-Stock ("86") Toggling (`o`)](#9-menu-item-stock--out-of-stock-86-toggling-o)
+10. [Table Search & Quick Jump (`g`)](#10-table-search--quick-jump-g)
+11. [Billing & Customer Mobile Capture (`p` / `b`)](#11-billing--customer-mobile-capture-p--b)
+12. [Applying Discount Offers](#12-applying-discount-offers)
+13. [Payment Modes & Dynamic UPI QR Code (`q`)](#13-payment-modes--dynamic-upi-qr-code-q)
+14. [Updating Payment Type on Paid Bills](#14-updating-payment-type-on-paid-bills)
+15. [Daily Sales Summary & Settlement Report / Z-Report (`z`)](#15-daily-sales-summary--settlement-report--z-report-z)
+16. [Order Settlement & Table Cleaning](#16-order-settlement--table-cleaning)
+17. [Reviewing Recent Bills & Historical Search (`/` or `s`)](#17-reviewing-recent-bills--historical-search--or-s)
+18. [Menu & Configuration Management (CSV `e` / `i`)](#18-menu--configuration-management-csv-e--i)
+19. [Receipt Printing & Local File Storage](#19-receipt-printing--local-file-storage)
+20. [Automatic Daily Database Backups](#20-automatic-daily-database-backups)
+21. [Keyboard Shortcuts Cheat Sheet](#21-keyboard-shortcuts-cheat-sheet)
+22. [Frequently Asked Questions & Troubleshooting](#22-frequently-asked-questions--troubleshooting)
 
 ---
 
 ## 1. Overview & System Requirements
 
-**DineInTakeOut** is a high-performance terminal user interface (TUI) designed for front-of-house restaurant operations. It coordinates dining room table states, take-out orders, fast item searching, receipt generation with tax calculations, and bill settlements.
+**DineInTakeOut** is a high-performance terminal user interface (TUI) designed for front-of-house restaurant operations. It coordinates dining room table states, take-out orders, fast item searching, kitchen order tickets (KOT), receipt generation with tax calculations, on-screen UPI QR codes, shift settlement reports (Z-Reports), and bill settlements.
 
 ### System Requirements
 - **Operating System**: Linux, macOS, or Windows (with UTF-8 terminal support).
@@ -52,8 +57,9 @@ The screen is divided into clear functional panels designed to minimize clutter 
 ├──────────────────────────────────┬────────────────────────────────────────────────────────┤
 │ Menu [Category: Main Course]     │ Bill #4 — PAID via UPI ✔ (Main-T4 / Dine-In)           │
 │ Paneer Butter Masala    ₹180.00  │ Item                  Qty    Each    Total             │
-│ Palak Paneer            ₹170.00  │ Butter Naan             2   40.00    80.00             │
-│ Dal Makhani             ₹140.00  │ Paneer Butter Masala    2  180.00   360.00             │
+│ Palak Paneer   [86 OUT] ₹170.00  │ Butter Naan             2   40.00    80.00             │
+│ Dal Makhani             ₹140.00  │   ↳ Extra crisp                                        │
+│                                  │ Paneer Butter Masala    2  180.00   360.00             │
 │                                  │ ──────────────────────────────────────────────         │
 │                                  │ Subtotal                             ₹440.00           │
 │                                  │ GST (5.0%)                            ₹22.00           │
@@ -64,9 +70,9 @@ The screen is divided into clear functional panels designed to minimize clutter 
 │ Bill #4   Main-T4    Dine-In    [UPI]            ₹462.00                                  │
 │ Bill #3   TK1        Take-Out   [CASH]           ₹250.00                                  │
 ├───────────────────────────────────────────────────────────────────────────────────────────┤
-│ Notification: Closed Main-T4 via UPI. Table 4 cleaning — auto-ready in 10 min.            │
+│ Notification: Generated KOT for Main-T4. Printed to bills/kot_Order_#4_...txt             │
 ├───────────────────────────────────────────────────────────────────────────────────────────┤
-│ Tab: Next panel · ↑↓: Select · Enter: Add/Open · p: Bill/Payment · c: Close · ?: Help    │
+│ Tab: Next panel · ↑↓: Select · Enter: Add/Open · p: Bill · k: KOT · z: Z-Report · ?: Help │
 └───────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -127,7 +133,25 @@ Every table follows an intuitive restaurant lifecycle:
 
 ---
 
-## 5. Take-Out Order Workflow
+## 5. Table Move, Transfer & Merge (`m`)
+
+In a busy dining room, guests frequently ask to move from one table to another (e.g., relocating to an AC room, joining friends at another table, or moving outside to the garden):
+
+1. Highlight the occupied table in the **Tables** panel.
+2. Press `m` to open the **Move / Transfer & Merge Table** modal.
+3. The dialog presents all other dining tables in the restaurant categorized into two actions:
+   - **`[MOVE]` (Free / Ready Tables)**:
+     - Selecting a free table transfers the entire check and cart items to the new table.
+     - The original table immediately enters cleaning or turns free.
+     - **Automatic Tax Recalculation**: If you move a party from a non-AC area (0% GST) into an AC room (AC surcharge + 5% GST), the system automatically updates the order's tax rates and AC charges in real time.
+   - **`[MERGE]` (Occupied Tables)**:
+     - Selecting a table that already has active guests merges all items, quantities, and notes from the current cart into the destination table's cart.
+     - The source table is released and marked clean.
+4. Navigate targets using `↑` / `↓` and press `Enter` to confirm, or `Esc` to cancel.
+
+---
+
+## 6. Take-Out Order Workflow
 
 Take-out orders do not tie up physical dining room tables:
 
@@ -140,19 +164,56 @@ Take-out orders do not tie up physical dining room tables:
 
 ---
 
-## 6. Cart Management & Item Adjustments
+## 7. Cart Management & Item Notes (`n`)
 
-When the active order's cart is focused (via `Tab` or pressing `Tab` from Menu):
+When an active order's cart is open:
 
 - **Increase Quantity**: Press `+` or `=`.
 - **Decrease Quantity**: Press `-`. Decreasing a quantity of `1` automatically removes the item from the cart.
 - **Remove Line Item**: Press `x` or `Delete`.
 - **Clear Cart**: Press `c` while in the Menu panel to clear all unpaid items.
+- **Attach Item Cooking Notes (`n`)**:
+  - Highlight any line item in the cart and press `n`.
+  - The **Item Special Note** dialog opens.
+  - Type custom customer cooking instructions (e.g. `"Less spicy, extra crisp"`, `"No onion, no garlic"`, `"Pack gravy separately"`).
+  - Press `Enter` to save.
+  - The note renders directly beneath the item name as `  ↳ <note>` in the cart, prints on Kitchen Order Tickets (KOT), prints on the final receipt, and is saved in SQLite records.
 - **Cart Calculations**: Subtotal, applicable discounts, AC surcharge (for AC rooms), and GST are automatically recalculated in real time.
 
 ---
 
-## 7. Table Search & Quick Jump (`g`)
+## 8. Kitchen Order Tickets (KOT) (`k`)
+
+DineInTakeOut provides full back-of-house kitchen coordination:
+
+1. After taking or updating guest orders, press `k` from the Menu or Cart panel.
+2. A 42-column Kitchen Order Ticket is generated:
+   - Includes Table / Take-out label, Area name, Order ID, and current timestamp.
+   - Lists each dish and quantity ordered alongside attached cooking notes (`↳ Note: ...`).
+   - Omits prices and taxes so kitchen staff can focus purely on order preparation.
+3. The ticket is saved to `bills/kot_Order_#<id>_<timestamp>.txt`.
+4. If a CUPS thermal printer is configured, the ticket is instantly printed to the kitchen printer.
+5. **Duplicate / Reprint Protection**:
+   - The first KOT printed displays `*** KITCHEN ORDER TICKET (KOT) ***`.
+   - Any subsequent print for the same order automatically displays `*** KITCHEN ORDER TICKET [REPRINT] ***` to prevent chefs from accidentally double-preparing dishes.
+
+---
+
+## 9. Menu Item Stock & Out-of-Stock ("86") Toggling (`o`)
+
+When the kitchen runs out of an ingredient or dish during a shift:
+
+1. Navigate to the **Menu** catalogue panel.
+2. Use `↑` / `↓` or `/` to highlight the item that is sold out.
+3. Press `o` to toggle its availability.
+4. The dish immediately displays a high-visibility red `[86 OUT]` badge next to its name.
+5. Staff cannot accidentally add out-of-stock items: pressing `Enter` shows a notification `"Item '<name>' is currently out of stock [86]."`
+6. Pressing `o` again restores the item to active stock once the kitchen restocks.
+7. Availability persists in SQLite (`menu_items.is_available`) and exports via the 5th column (`Available`) of `menu.csv`.
+
+---
+
+## 10. Table Search & Quick Jump (`g`)
 
 In busy restaurants with multiple rooms and gardens, switching between dozens of tables is effortless using the Table Search & Jump tool:
 
@@ -169,7 +230,7 @@ In busy restaurants with multiple rooms and gardens, switching between dozens of
 
 ---
 
-## 8. Billing & Customer Mobile Capture (`p` / `b`)
+## 11. Billing & Customer Mobile Capture (`p` / `b`)
 
 When guests request the check or take-out is ready:
 
@@ -187,7 +248,7 @@ When guests request the check or take-out is ready:
 
 ---
 
-## 9. Applying Discount Offers
+## 12. Applying Discount Offers
 
 If your restaurant has active discount offers configured (e.g., Happy Hour 10%, Festival 15%):
 
@@ -200,7 +261,7 @@ If your restaurant has active discount offers configured (e.g., Happy Hour 10%, 
 
 ---
 
-## 10. Payment Modes: UPI, Cash, Card
+## 13. Payment Modes & Dynamic UPI QR Code (`q`)
 
 The application natively supports all standard restaurant settlement options:
 
@@ -212,30 +273,26 @@ The application natively supports all standard restaurant settlement options:
 | **Person Credit** | `4` | Regular customer tab / ledger account |
 | **Have it on Hotel** | `5` | House complimentary, VIP, or manager comp |
 
+### Dynamic On-Screen UPI QR Code (`q`)
+When customers choose UPI, cashiers can generate an on-screen QR code:
+1. In the payment mode modal, press `q`.
+2. The **UPI Payment QR** modal pops up in high contrast:
+   - Generates an official NPCI UPI string: `upi://pay?pa=<upi_id>&pn=DineInTakeOut&am=<amount>&cu=INR&tn=Bill_<id>`.
+   - Renders a razor-sharp Unicode half-block QR code directly in the terminal window.
+   - Displays the exact amount in rupees and the recipient UPI VPA.
+3. The customer simply points their camera from PhonePe, Google Pay, Paytm, BHIM, or any banking app to complete payment instantly.
+4. Press `Enter` to confirm payment and mark the bill paid via UPI, or `Esc` to exit.
+
 ---
 
-## 11. Updating Payment Type on Paid Bills
+## 14. Updating Payment Type on Paid Bills
 
 A common operational challenge in restaurants: a bill is printed, and the guest changes their payment method (e.g., guest tries UPI, the transaction fails, and they hand cash or card instead).
 
 ### How to update payment type:
 1. Ensure the order is in `[Bill Paid]` status.
 2. Press `p` or `b`.
-3. The **Update Payment Type** modal opens:
-   ```text
-   ┌────────────────────────────────────────────────────┐
-   │              Update Payment Type                   │
-   │  Bill #4 (Main-T4) — ₹462.00 · Paid                │
-   │                                                    │
-   │    [1 / c]  Cash                                   │
-   │  ▸ [2 / u]  UPI                                    │
-   │    [3 / d]  Card                                   │
-   │    [4]      Person credit                          │
-   │    [5]      Have it on hotel                       │
-   │                                                    │
-   │  ↑↓/1–5/c,u,d: select · Enter: update bill · Esc   │
-   └────────────────────────────────────────────────────┘
-   ```
+3. The **Update Payment Type** modal opens.
 4. Press `u` (or `2`) for UPI, `c` (or `1`) for Cash, or `d` (or `3`) for Card.
 5. The system immediately updates:
    - Active Bill Title: `Bill #4 — PAID via UPI ✔`
@@ -247,7 +304,28 @@ A common operational challenge in restaurants: a bill is printed, and the guest 
 
 ---
 
-## 12. Order Settlement & Table Cleaning
+## 15. Daily Sales Summary & Settlement Report / Z-Report (`z`)
+
+At shift change or end-of-day closing:
+
+1. Press `z` from anywhere in the application.
+2. The **Daily Sales & Settlement Report** modal appears:
+   - **Date & Order Counts**: Total orders billed, with breakdown between Dine-In and Take-Out checks.
+   - **Financial Totals**: Gross Food Subtotal, Total Discounts given, AC Surcharges collected, Total GST collected, and Net Daily Revenue.
+   - **Payment Method Breakdown**: Exact monetary collections and check counts for:
+     - Cash collections
+     - UPI collections
+     - Card collections
+     - Person credit entries
+     - House complimentary orders
+3. **Print & Export (`p`)**:
+   - Press `p` while viewing the Z-report to print a clean 42-column register tape slip.
+   - A copy is automatically archived to `bills/z_report_YYYY-MM-DD.txt`.
+4. Press `Esc` to close the report.
+
+---
+
+## 16. Order Settlement & Table Cleaning
 
 When guests leave the table:
 
@@ -262,28 +340,40 @@ When guests leave the table:
 
 ---
 
-## 13. Reviewing Recent Bills (History)
+## 17. Reviewing Recent Bills & Historical Search (`/` or `s`)
 
-To inspect past receipts during your shift:
-
+### Recent Bills Panel
 1. Navigate to the **Recent bills** panel (press `Tab` from the Tables panel).
 2. The panel lists the latest 5 completed bills with their Bill ID, Table Label, Service type, Payment Mode (`[UPI]`, `[CASH]`, `[CARD]`), and Total Amount.
 3. Use `↑` / `↓` to scroll through recent bills.
 4. The right-hand panel renders a **read-only view of the exact receipt** that was generated for that bill.
 
+### Historical Bill Search & Reprint (`/` or `s`)
+Need to locate a bill from hours ago or look up a customer's receipt by mobile?
+1. In the **Recent bills** panel, press `/` or `s`.
+2. The **Search Historical Bills** modal opens.
+3. Type any search term:
+   - Bill ID (e.g. `1`, `42`)
+   - Customer mobile number (e.g. `98765`)
+4. The table displays matching results from SQLite with columns:
+   `Bill #`, `Table`, `Service`, `Mobile`, `Total`, `Mode`, and `Date/Time`.
+5. Use `↑` / `↓` to select the bill.
+6. Press `Enter` or `p` to reprint the exact receipt directly to CUPS and save a fresh copy in `bills/`.
+7. Press `Esc` to exit search.
+
 ---
 
-## 14. Menu & Configuration Management (CSV `e` / `i`)
+## 18. Menu & Configuration Management (CSV `e` / `i`)
 
 All restaurant configuration is managed via spreadsheet-compatible CSV files:
 
 ### Export Configuration (`e`)
 1. From the **Menu** panel, press `e`.
 2. The application exports four CSV files to your working directory:
-   - `menu.csv`: Dish names, categories, units, and prices.
+   - `menu.csv`: Dish names, categories, units, prices, and stock availability (`Available`).
    - `areas.csv`: Room names, AC status, and table counts.
    - `offers.csv`: Promotional discount names and percentages.
-   - `config.csv`: Restaurant GSTIN and AC surcharge percentage rate.
+   - `config.csv`: Restaurant GSTIN, AC surcharge percentage rate, and UPI VPA ID (`UpiId`).
 3. You will receive a confirmation notification: `"Exported configuration bundle."`
 
 ### Edit in Excel / LibreOffice
@@ -296,20 +386,34 @@ You can open and edit any of these CSV files with Microsoft Excel, Google Sheets
 
 ---
 
-## 15. Receipt Printing & Local File Storage
+## 19. Receipt Printing & Local File Storage
 
 - **Local Storage**: Every generated bill is written to `bills/` as:
   ```text
   bills/bill_<order_id>_<timestamp>.txt
   ```
+- **Kitchen Order Tickets (KOT)**: Saved to `bills/kot_Order_#<id>_<timestamp>.txt`.
+- **Daily Sales Summaries (Z-Reports)**: Saved to `bills/z_report_<date>.txt`.
 - **Physical Thermal Printers**: If your system has CUPS configured (Linux/macOS) with a default printer:
-  - DineInTakeOut automatically sends the receipt to `lp`.
-  - The receipt layout is formatted for standard 42-column 80mm thermal receipt paper.
-  - If a printer is unavailable or offline, the bill is safely stored in the database and `bills/` without halting the app.
+  - DineInTakeOut automatically sends receipts and KOTs to `lp`.
+  - The layout is formatted for standard 42-column 80mm thermal receipt paper.
+  - If a printer is unavailable or offline, files are safely stored without halting the app.
 
 ---
 
-## 16. Keyboard Shortcuts Cheat Sheet
+## 20. Automatic Daily Database Backups
+
+To protect against system crashes or disk faults:
+- On every application startup, DineInTakeOut automatically backs up the database to:
+  ```text
+  data/backups/billing_YYYY-MM-DD.db
+  ```
+- Backups run once per calendar day without slowing startup or overwriting existing day-start snapshots.
+- Stored safely alongside the active database for instant restoration.
+
+---
+
+## 21. Keyboard Shortcuts Cheat Sheet
 
 | Category | Key | Description |
 | :--- | :--- | :--- |
@@ -318,14 +422,18 @@ You can open and edit any of these CSV files with Microsoft Excel, Google Sheets
 | | `Enter` | Open order on ready table / switch to table |
 | | `s` | Advance order stage (Taking order → Serving → Ready for bill) |
 | | `g` | Search and jump to any table |
+| | `m` | Move / transfer table or merge into occupied table |
 | | `r` | Mark cleaning table as ready immediately |
 | | `c` | Settle and close paid order |
 | **Menu & Cart** | `/` | Focus search bar |
 | | `↑` / `↓` or `j` / `k` | Scroll menu or cart items |
 | | `Enter` or `Space` | Add highlighted item to cart |
+| | `o` | Toggle item out-of-stock ("86") status |
 | | `+` / `=` | Increase item quantity |
 | | `-` | Decrease item quantity (removes at 0) |
 | | `x` / `Delete` | Remove selected line from cart |
+| | `n` | Add / edit cooking note on selected item |
+| | `k` | Generate and print Kitchen Order Ticket (KOT) |
 | | `c` | Clear unpaid cart (in Menu panel) |
 | | `e` | Export config bundle to CSV |
 | | `i` | Import config bundle from CSV |
@@ -335,6 +443,9 @@ You can open and edit any of these CSV files with Microsoft Excel, Google Sheets
 | | `3` or `d` | Select Card payment mode |
 | | `4` | Select Person Credit payment mode |
 | | `5` | Select Have it on Hotel payment mode |
+| | `q` | Display dynamic on-screen UPI QR Code |
+| **Reports & Search**| `z` | Daily Sales Summary & Settlement (Z-Report) |
+| | `/` or `s` | Search & reprint historical bills (in Recent Bills) |
 | **General** | `Tab` / `BackTab` | Cycle panel focus |
 | | `[` / `]` | Switch between active open orders |
 | | `?` | Toggle help overlay |
@@ -342,7 +453,7 @@ You can open and edit any of these CSV files with Microsoft Excel, Google Sheets
 
 ---
 
-## 17. Frequently Asked Questions & Troubleshooting
+## 22. Frequently Asked Questions & Troubleshooting
 
 #### Q: How do I switch between Dine-In orders and Take-Out orders?
 **A**: Press `[` and `]` to cycle through all open orders, or click/select them from the floor plan and take-out chips.
@@ -350,8 +461,11 @@ You can open and edit any of these CSV files with Microsoft Excel, Google Sheets
 #### Q: Can I change an order after billing?
 **A**: Once a bill is generated, the item lines and amounts are frozen to guarantee financial auditability. However, you can freely update the **Payment Type** (UPI, Cash, Card) at any time before closing the table by pressing `p` or `b`.
 
+#### Q: How do I configure my restaurant's UPI QR code?
+**A**: Export your configuration with `e`, open `config.csv`, and set `UpiId` to your bank or Merchant VPA (e.g. `restaurant@okicici` or `9876543210@paytm`). Import back with `i`. When customers choose UPI, press `q` to display the QR code.
+
 #### Q: What happens if the power goes out or the app closes?
-**A**: All active orders, table states, cart items, customer mobile numbers, and paid bills are stored in the embedded SQLite database (`data/billing.db`). When you restart the app, everything resumes exactly where you left off.
+**A**: All active orders, table states, cart items, customer mobile numbers, item notes, and paid bills are stored in the embedded SQLite database (`data/billing.db`). When you restart the app, everything resumes exactly where you left off. In addition, daily backup snapshots are created automatically in `data/backups/`.
 
 #### Q: The screen appears cramped on my laptop. What should I do?
 **A**: DineInTakeOut includes an automatic compact layout mode that activates when the terminal height is under 33 lines. To see all panels simultaneously including recent bill history, simply maximize your terminal window or reduce your terminal font size slightly.

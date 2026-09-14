@@ -3,7 +3,7 @@
 [![Rust](https://img.shields.io/badge/Rust-2021_Edition-orange?logo=rust)](https://www.rust-lang.org/)
 [![TUI](https://img.shields.io/badge/TUI-Ratatui_0.28-blue)](https://github.com/ratatui-org/ratatui)
 [![Database](https://img.shields.io/badge/Database-Turso_SQLite-teal)](https://turso.tech/)
-[![Tests](https://img.shields.io/badge/Tests-16_Unit_%7C_11_Integration_Passing-brightgreen)](tests/integration_smoke.rs)
+[![Tests](https://img.shields.io/badge/Tests-17_Unit_%7C_16_Integration_Passing-brightgreen)](tests/integration_smoke.rs)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 A high-performance, keyboard-driven Terminal User Interface (TUI) billing, table management, and point-of-sale system engineered for dine-in restaurants and take-out counters.
@@ -23,8 +23,9 @@ Built in pure Rust using **Ratatui** and powered by an embedded **Turso SQLite e
 ├──────────────────────────────────┬────────────────────────────────────────────────────────┤
 │ Menu [Category: Main Course]     │ Bill #4 — PAID via UPI ✔ (Main-T4 / Dine-In)           │
 │ Paneer Butter Masala    ₹180.00  │ Item                  Qty    Each    Total             │
-│ Palak Paneer            ₹170.00  │ Butter Naan             2   40.00    80.00             │
-│ Dal Makhani             ₹140.00  │ Paneer Butter Masala    2  180.00   360.00             │
+│ Palak Paneer   [86 OUT] ₹170.00  │ Butter Naan             2   40.00    80.00             │
+│ Dal Makhani             ₹140.00  │   ↳ Extra crisp                                        │
+│                                  │ Paneer Butter Masala    2  180.00   360.00             │
 │                                  │ ──────────────────────────────────────────────         │
 │                                  │ Subtotal                             ₹440.00           │
 │                                  │ GST (5.0%)                            ₹22.00           │
@@ -35,9 +36,9 @@ Built in pure Rust using **Ratatui** and powered by an embedded **Turso SQLite e
 │ Bill #4   Main-T4    Dine-In    [UPI]            ₹462.00                                  │
 │ Bill #3   TK1        Take-Out   [CASH]           ₹250.00                                  │
 ├───────────────────────────────────────────────────────────────────────────────────────────┤
-│ Notification: Closed Main-T4 via UPI. Table 4 cleaning — auto-ready in 10 min.            │
+│ Notification: Generated KOT for Main-T4. Printed to bills/kot_Order_#4_...txt             │
 ├───────────────────────────────────────────────────────────────────────────────────────────┤
-│ Tab: Next panel · ↑↓: Select · Enter: Add/Open · p: Bill/Payment · c: Close · ?: Help    │
+│ Tab: Next panel · ↑↓: Select · Enter: Add/Open · p: Bill · k: KOT · z: Z-Report · ?: Help │
 └───────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -46,9 +47,14 @@ Built in pure Rust using **Ratatui** and powered by an embedded **Turso SQLite e
 ## Key Highlights
 
 - **Visual Floor Plan & Stage Lifecycle**: Track dining rooms in real time (`Ready` → `Taking order` → `Serving` → `Ready for bill` → `Bill paid` → `Cleaning` → `Ready`). Tables feature an automated 10-minute cleaning countdown or instant turnaround override (`r`).
+- **Table Move, Transfer & Merge (`m`)**: Seamlessly move an active check to a free table (automatically recalculating taxes & AC charges) or merge carts into an already occupied table.
 - **Interactive Table Search & Jump (`g`)**: Instantly search across all tables by number, room name, or status code (`ready`, `paid`, `dirty`) and jump directly to any order.
-- **Dine-In & Take-Out Management**: Simultaneous handling of dine-in table checks and fast counter take-out queues (`t`).
-- **Fast Fuzzy Item Search (`/`)**: Skim-based fuzzy search instantly filters hundreds of menu items by name or category.
+- **Kitchen Order Tickets (KOT) (`k`)**: Generate standard 42-column kitchen order slips with automatic duplicate/reprint indicators (`*** KITCHEN ORDER TICKET [REPRINT] ***`), saving to `bills/` and routing to thermal kitchen printers.
+- **Item Cooking Notes / Special Instructions (`n`)**: Attach specific guest requests ("Less spicy", "No onion/garlic") directly to cart line items, visible on receipts, KOT slips, and saved in database records.
+- **Out-of-Stock / "86" Toggling (`o`)**: Toggle item availability live from the menu catalogue with prominent `[86 OUT]` indicators, preventing accidental ordering and synchronizing with SQLite & CSV.
+- **Daily Sales & Shift Summary / Z-Report (`z`)**: Instant settlement reports with gross revenue, discounts, AC charges, tax collections, net revenue, and detailed payment method breakdowns, printable with `p` to `bills/z_report_*.txt`.
+- **Dynamic On-Screen UPI QR Code (`q`)**: Generate standard NPCI-compliant UPI payment QR codes displayed in full high-contrast Unicode half-block characters directly on terminal screens for contact-free customer smartphone scans.
+- **Historical Bill Search & Reprint (`/` or `s` in Recent Bills)**: Query past orders by Bill ID or 10-digit mobile number, preview bill breakdowns, and reprint receipts anytime.
 - **Accurate Tax & Surcharge Engine**: Automatically handles standard restaurant GST rates (5% on AC dine-in, 8% on take-out, 0% on non-AC dine-in) and configurable AC room surcharges.
 - **Comprehensive Payment Settle & Updates**: Settle bills or update payment types after payment with dedicated hotkeys:
   - `1` or `c`: **Cash**
@@ -56,8 +62,7 @@ Built in pure Rust using **Ratatui** and powered by an embedded **Turso SQLite e
   - `3` or `d`: **Card** (Debit / Credit)
   - `4`: **Person Credit** (Customer ledger)
   - `5`: **Have it on Hotel** (Complimentary / House tab)
-- **Embedded Turso SQLite Persistence**: Orders, table statuses, cart items, customer mobile numbers, and paid bills persist automatically to `data/billing.db`. Recovers shift state seamlessly across restarts or power outages.
-- **Thermal Printing & Receipt Storage**: Auto-generates standard 42-column 80mm thermal receipts in `bills/` and prints via CUPS (`lp`).
+- **Embedded Turso SQLite & Automatic Daily Backups**: Orders, table statuses, cart items, customer mobile numbers, and paid bills persist automatically to `data/billing.db`. Daily snapshots are safely preserved in `data/backups/billing_YYYY-MM-DD.db`.
 - **Spreadsheet-Friendly Configuration**: Export (`e`) and import (`i`) complete restaurant setups (`menu.csv`, `areas.csv`, `offers.csv`, `config.csv`) using Excel, LibreOffice, or Google Sheets.
 
 ---
@@ -96,12 +101,19 @@ cargo build --release
 | `Enter` | Open order on table / Switch to table order / Add item to cart |
 | `s` | Advance order stage (Taking order → Serving → Ready for bill) |
 | `g` | Open **Search / Jump Table** popup |
+| `m` | **Move / Transfer / Merge Table**: Transfer to clean table or merge into occupied table |
 | `t` | Create a new **Take-Out** order |
 | `[` / `]` | Cycle between all active open orders |
 | `/` | Focus **Menu Search** bar |
+| `o` | Toggle item **Out-of-Stock ("86")** status in Menu catalogue |
 | `+` / `-` | Increase / decrease quantity of selected cart line |
 | `x` / `Delete` | Remove selected item line from cart |
+| `n` | Add / edit **Item Cooking Note** on selected cart item |
+| `k` | Generate and print **Kitchen Order Ticket (KOT)** |
 | `p` (or `b`) | **Billing / Payment**: Generate bill, or update payment mode (UPI, Cash, Card) if already paid |
+| `q` | Display **Dynamic UPI QR Code** during payment flow |
+| `z` | Open **Daily Sales Summary (Z-Report)** & Settlement breakdown |
+| `/` or `s` | **Search & Reprint Past Bills** (when focusing Recent Bills panel) |
 | `c` | Clear cart (in Menu) / Settle & close order (in Tables) |
 | `r` | Override cleaning timer and mark table as **Ready** |
 | `e` / `i` | **Export / Import** full CSV configuration bundle |
@@ -143,8 +155,8 @@ cargo clippy --all-targets -- -D warnings
 ```
 
 ### Test Coverage Highlights
-- **16 Unit Tests**: Domain financial math, AC surcharges, GST rules, cart operations, CSV serialization/deserialization, and isolated database round-trips.
-- **11 Integration Tests**: Full terminal UI simulations using Ratatui's headless `TestBackend`, validating table jump search, mobile entry, offer selection, payment type switching (UPI/Cash/Card), receipt updates, and database consistency.
+- **17 Unit Tests**: Domain financial math, AC surcharges, GST rules, cart operations, CSV serialization/deserialization, isolated database round-trips, and daily sales aggregation queries.
+- **16 Integration Tests**: Full terminal UI simulations using Ratatui's headless `TestBackend`, validating table jump search, mobile entry, offer selection, payment type switching (UPI/Cash/Card), receipt updates, KOT generation, item notes, "86" stock toggle, table moves/merges, dynamic UPI QR rendering, Z-reports, bill search, and automated daily backups.
 
 To run code coverage with LLVM tools:
 ```bash

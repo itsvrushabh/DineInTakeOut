@@ -23,6 +23,7 @@ The menu catalogue (seeds an empty database on first run).
 | `Item Name` | Dish name                                       |
 | `Unit`      | Portion description (e.g. "1 plate", "250 ml")  |
 | `Price`     | Price in rupees (numeric, > 0)                  |
+| `Available` | Optional stock status (`yes`/`true`/`1` or `no`/`false`/`0`). Defaults to `yes`. Unavailable items show `[86 OUT]`. |
 
 ## `areas.csv`
 
@@ -51,15 +52,16 @@ An empty `offers.csv` simply clears all offers (offers are optional).
 
 ## `config.csv`
 
-Key/value settings. Both keys are optional; missing keys keep the current value.
+Key/value settings. All keys are optional; missing keys keep current values.
 
 | Key         | Value                                  |
 | ----------- | -------------------------------------- |
 | `GSTNumber` | Registered GSTIN printed on receipts   |
 | `AcRate`    | AC surcharge rate as a percentage (e.g. `6`) |
+| `UpiId`     | Virtual Payment Address (VPA) used for dynamic UPI QR code generation (e.g. `merchant@upi`) |
 
-Export always writes both rows. On import, `AcRate` is parsed as a percentage
-and clamped to `0`–`100`; `GSTNumber` is stored verbatim.
+Export always writes all three rows. On import, `AcRate` is parsed as a percentage
+and clamped to `0`–`100`; `GSTNumber` and `UpiId` are stored verbatim.
 
 ## Notes
 

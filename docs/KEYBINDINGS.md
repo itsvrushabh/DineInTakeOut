@@ -1,6 +1,7 @@
 # Keybindings
 
 | Key | Action |
+| :--- | :--- |
 | `?` | Show this keybinding help |
 | `Tab` / `Shift+Tab` | Move focus between panels |
 | `↑` / `↓` or `j` / `k` | Select a menu item, cart item, area, or saved bill |
@@ -8,20 +9,27 @@
 | `[` / `]` | Cycle left / right through all open orders (dine-in and take-out) |
 | `1`–`9` | Jump to a table area |
 | `g` | Search / jump to any table (by number, area, or status) |
+| `m` | Move / transfer order to clean table, or merge into occupied table (in Tables) |
 | `/` | Focus menu search |
+| `o` | Toggle menu item out-of-stock ("86") status (in Menu) |
 | `Enter` | Add menu item; open or switch table order; pay from cart |
 | `=` / `+` | Increase selected cart-item quantity |
 | `-` | Decrease selected cart-item quantity; removes it at quantity one |
 | `x` / `Delete` | Remove selected cart item |
+| `n` | Add / edit kitchen note on selected cart item |
+| `k` | Generate and print Kitchen Order Ticket (KOT) |
 | `p` (or `b` in Tables) | Generate active bill; or update payment type (UPI, Cash, Card) if already paid |
+| `q` | Display dynamic on-screen UPI QR code (in payment modal) |
+| `z` | Open Daily Sales Summary (Z-Report) & Settlement breakdown |
+| `/` or `s` | Search and reprint historical bills by Bill ID or Mobile (in Recent Bills) |
 | `t` | Open take-out order |
 | `s` | Advance the active order: Taking order → Serving → Ready for bill |
 | `c` | Clear an unpaid cart in Menu, or settle/close a paid order in Tables (prompts mode of payment) |
 | `r` | Mark the selected cleaning table as ready |
-| `e` / `i` | Export / import the **full config** (menu, areas, offers, GSTIN, AC rate) as CSV while in Menu |
-| `q` / `Esc` | Quit (`Esc` also exits search and the billing popups) |
+| `e` / `i` | Export / import the **full config** (menu, areas, offers, GSTIN, AC rate, UPI ID) as CSV while in Menu |
+| `q` / `Esc` | Quit (`Esc` also exits search and modals) |
 
-## Table lifecycle
+## Table lifecycle & Move / Merge (`m`)
 
 ```
 Ready → Taking order → Serving → Ready for bill → Bill paid
@@ -29,9 +37,12 @@ Ready → Taking order → Serving → Ready for bill → Bill paid
       └────────── Cleaning (~10 min) ←───────────────┘
 ```
 
-- `Enter` opens an order on a Ready table (or switches to the order on an
-  occupied one).
+- `Enter` opens an order on a Ready table (or switches to the order on an occupied one).
 - `s` advances the stage; the floor-plan card updates instantly.
+- `m` opens the **Table Move / Transfer & Merge** modal:
+  - Select any free table `[MOVE]` to relocate the entire order. Taxes and AC surcharges automatically adjust to match the destination area.
+  - Select an occupied table `[MERGE]` to combine all cart items and quantities into the target check.
+- `p` opens the billing prompt — type the customer's 10-digit mobile number.
 - `p` opens the billing prompt — type the customer's 10-digit mobile number
   (digits only, `Backspace` to fix, `Esc` to cancel). `Enter` generates the
   bill; if any discount **offers** exist, a popup first asks which offer (or
@@ -80,11 +91,33 @@ printed on the receipt and stored with the paid order in the database.
   - `3` or `d`: **Card**
   - `4`: **Person credit**
   - `5`: **Have it on hotel**
+  - `q`: **Dynamic UPI QR Code**: displays full on-screen QR code for direct smartphone scanning.
 - Press `Enter` to confirm, or `Esc` to cancel.
 
-## Recent bills
+## Kitchen Order Tickets (KOT) (`k`) & Item Notes (`n`)
 
-From the Tables panel, press `Tab` to focus **Recent bills**. Use `↑` / `↓` to select one and view its saved receipt in the bill panel. Previous bills cannot be edited.
+- While editing an active order cart, select an item and press `n` to attach a kitchen instruction (e.g. "Less spicy", "No garlic", "Crispy").
+- Press `k` to dispatch the order to the kitchen.
+- The KOT prints a 42-column slip without prices or taxes, showing table/order, timestamp, items, quantities, and notes. Subsequent KOT prints for the same table automatically display `[REPRINT]`. Slips are archived in `bills/`.
+
+## Out-of-Stock / "86" Toggling (`o`)
+
+- In the Menu panel, highlight any item and press `o`.
+- Out-of-stock items display a prominent red `[86 OUT]` badge.
+- Staff cannot accidentally add out-of-stock items to a cart.
+- Availability is persisted in `menu_items.is_available` and exported in the 5th column of `menu.csv`.
+
+## Daily Sales Summary / Z-Report (`z`)
+
+- Press `z` from anywhere in the application to view the Day/Shift summary.
+- Displays total order count (dine-in vs take-out), gross subtotal, applied discounts, AC surcharges, GST collected, net revenue, and a breakdown across all payment methods.
+- Press `p` inside the Z-report modal to export the report to `bills/z_report_YYYY-MM-DD.txt` and send it to the system printer.
+
+## Historical Bill Search & Reprint (`/` or `s` in Recent Bills)
+
+- Focus the **Recent Bills** panel (`Tab`) and press `/` or `s`.
+- Enter any Bill ID (e.g. `5`) or customer mobile number (e.g. `98765`) to filter across the entire database history.
+- Use `↑`/`↓` to highlight a bill and press `Enter` or `p` to reprint the thermal receipt.
 
 ---
 

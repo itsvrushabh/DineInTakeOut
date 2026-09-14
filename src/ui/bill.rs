@@ -166,12 +166,25 @@ pub fn render_bill(f: &mut Frame, app: &App, area: Rect) {
         .enumerate()
         .map(|(i, line)| {
             let selected = i == order.cart_index && app.focus == Focus::Cart;
+            let has_note = line.note.is_some();
+            let item_cell = if let Some(note) = &line.note {
+                Cell::from(Text::from(vec![
+                    Line::from(line.name.clone()),
+                    Line::from(Span::styled(
+                        format!("  ↳ {note}"),
+                        Style::default().fg(Color::Yellow),
+                    )),
+                ]))
+            } else {
+                Cell::from(line.name.clone())
+            };
             Row::new(vec![
-                Cell::from(line.name.clone()),
+                item_cell,
                 Cell::from(Text::from(format!("{}", line.qty)).alignment(Alignment::Right)),
                 Cell::from(Text::from(money(line.unit_price)).alignment(Alignment::Right)),
                 Cell::from(Text::from(money(line.total())).alignment(Alignment::Right)),
             ])
+            .height(if has_note { 2 } else { 1 })
             .style(if selected {
                 Style::default()
                     .bg(Color::DarkGray)

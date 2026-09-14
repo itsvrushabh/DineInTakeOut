@@ -158,12 +158,7 @@ pub fn default_menu() -> Vec<MenuItem> {
     ];
 
     rows.iter()
-        .map(|&(category, name, unit, price)| MenuItem {
-            category: category.to_string(),
-            name: name.to_string(),
-            unit: unit.to_string(),
-            price,
-        })
+        .map(|&(category, name, unit, price)| MenuItem::new(category, name, unit, price))
         .collect()
 }
 
@@ -182,11 +177,20 @@ pub fn load_menu(path: &Path) -> io::Result<Vec<MenuItem>> {
         if get(1).is_empty() || price <= 0.0 {
             continue;
         }
+        let is_available = if let Some(val) = rec.get(4) {
+            !matches!(
+                val.trim().to_ascii_lowercase().as_str(),
+                "no" | "false" | "0" | "out"
+            )
+        } else {
+            true
+        };
         items.push(MenuItem {
             category: get(0),
             name: get(1),
             unit: get(2),
             price,
+            is_available,
         });
     }
     Ok(items)
@@ -304,7 +308,12 @@ pub fn load_config_csv(path: &Path) -> io::Result<HashMap<String, String>> {
     Ok(map)
 }
 
-pub fn export_config_csv(path: &Path, gst_number: &str, ac_rate: f64) -> io::Result<()> {
+pub fn export_config_csv(
+    path: &Path,
+    gst_number: &str,
+    ac_rate: f64,
+    upi_id: &str,
+) -> io::Result<()> {
     let mut wtr = csv::Writer::from_path(path).map_err(io::Error::other)?;
     wtr.write_record(["Key", "Value"])
         .map_err(io::Error::other)?;
@@ -312,6 +321,8 @@ pub fn export_config_csv(path: &Path, gst_number: &str, ac_rate: f64) -> io::Res
         .map_err(io::Error::other)?;
     let ac_rate_str = format!("{:.2}", ac_rate * 100.0);
     wtr.write_record(["AcRate", &ac_rate_str])
+        .map_err(io::Error::other)?;
+    wtr.write_record(["UpiId", upi_id])
         .map_err(io::Error::other)?;
     wtr.flush()?;
     Ok(())
@@ -329,6 +340,7 @@ mod tests {
             assert!(!item.name.is_empty());
             assert!(!item.category.is_empty());
             assert!(item.price > 0.0);
+            assert!(item.is_available);
         }
     }
 
@@ -338,11 +350,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.csv");
 
-        export_config_csv(&path, "27AAPFU0939F1ZV", 0.065).unwrap();
+        export_config_csv(&path, "27AAPFU0939F1ZV", 0.065, "krishna@upi").unwrap();
         let map = load_config_csv(&path).unwrap();
 
         assert_eq!(map.get("GSTNumber").unwrap(), "27AAPFU0939F1ZV");
         assert_eq!(map.get("AcRate").unwrap(), "6.50");
+        assert_eq!(map.get("UpiId").unwrap(), "krishna@upi");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

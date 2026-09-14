@@ -49,10 +49,11 @@ Stores the active menu catalogue.
 
 ```sql
 CREATE TABLE IF NOT EXISTS menu_items (
-    name     TEXT PRIMARY KEY,
-    category TEXT NOT NULL,
-    unit     TEXT NOT NULL DEFAULT '',
-    price    REAL NOT NULL CHECK (price >= 0)
+    name         TEXT PRIMARY KEY,
+    category     TEXT NOT NULL,
+    unit         TEXT NOT NULL DEFAULT '',
+    price        REAL NOT NULL CHECK (price >= 0),
+    is_available INTEGER NOT NULL DEFAULT 1
 );
 ```
 
@@ -62,6 +63,7 @@ CREATE TABLE IF NOT EXISTS menu_items (
 | `category` | `TEXT` | `NOT NULL` | Menu section (e.g. "Main Course", "Starters") |
 | `unit` | `TEXT` | `NOT NULL DEFAULT ''` | Portion size description (e.g. "1 plate", "2 pcs") |
 | `price` | `REAL` | `NOT NULL CHECK (price >= 0)` | Price in Indian Rupees |
+| `is_available` | `INTEGER` | `NOT NULL DEFAULT 1` | `1` if item is active; `0` if marked out-of-stock ("86") |
 
 ---
 
@@ -116,7 +118,8 @@ CREATE TABLE IF NOT EXISTS order_items (
     name       TEXT NOT NULL,
     unit_price REAL NOT NULL,
     qty        INTEGER NOT NULL CHECK (qty > 0),
-    line_total REAL NOT NULL
+    line_total REAL NOT NULL,
+    notes      TEXT NOT NULL DEFAULT ''
 );
 ```
 
@@ -150,6 +153,7 @@ CREATE TABLE IF NOT EXISTS open_order_items (
     name       TEXT NOT NULL,
     unit_price REAL NOT NULL,
     qty        INTEGER NOT NULL CHECK (qty > 0),
+    notes      TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (order_id, position)
 );
 ```
@@ -218,6 +222,7 @@ CREATE TABLE IF NOT EXISTS settings (
 Standard keys:
 - `'GSTNumber'`: The restaurant's registered GSTIN (printed on receipts).
 - `'AcRate'`: Surcharge percentage rate for AC dining areas (e.g. `'6.0'`).
+- `'UpiId'`: Virtual Payment Address (VPA) for dynamic UPI QR generation (e.g. `'merchant@upi'`).
 
 ---
 
@@ -240,9 +245,9 @@ INSERT INTO orders (id, label, service, table_number, area, customer_mobile,
                     subtotal, discount, ac_charge, tax, total, payment_mode, status)
 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'PAID');
 
--- Insert line items
-INSERT INTO order_items (order_id, name, unit_price, qty, line_total)
-VALUES (?1, ?2, ?3, ?4, ?5);
+-- Insert line items with kitchen notes
+INSERT INTO order_items (order_id, name, unit_price, qty, line_total, notes)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6);
 
 -- Remove from open orders
 DELETE FROM open_orders WHERE id = ?1;
@@ -260,6 +265,28 @@ SELECT id, label, service, total, payment_mode
 FROM orders
 ORDER BY id DESC
 LIMIT 5;
+```
+
+### 5. Daily Sales & Shift Aggregation (Z-Report)
+```sql
+SELECT 
+    COUNT(*),
+    COALESCE(SUM(subtotal), 0),
+    COALESCE(SUM(discount), 0),
+    COALESCE(SUM(ac_charge), 0),
+    COALESCE(SUM(tax), 0),
+    COALESCE(SUM(total), 0)
+FROM orders
+WHERE substr(created_at, 1, 10) = ?1;
+```
+
+### 6. Historical Bill Search
+```sql
+SELECT id, label, service, customer_mobile, total, payment_mode, created_at
+FROM orders
+WHERE CAST(id AS TEXT) LIKE ?1 OR customer_mobile LIKE ?1
+ORDER BY id DESC
+LIMIT 50;
 ```
 
 ---
@@ -283,9 +310,17 @@ sqlite3 data/billing.db "SELECT area, table_number, status, dirty_since FROM phy
 
 ## 5. Backups & Disaster Recovery
 
-- **Creating a Backup**: Simply copy the database file:
-  ```bash
-  cp data/billing.db data/billing_backup_$(date +%F).db
+- **Automated Daily Backups**:
+  On application startup, `DineInTakeOut` automatically backs up the database file to:
+  ```text
+  data/backups/billing_YYYY-MM-DD.db
   ```
+  If a backup for today's date already exists, it will not be overwritten, ensuring shift safety across day starts.
+
+- **Manual Backups**:
+  ```bash
+  cp data/billing.db data/backups/billing_manual_$(date +%F_%T).db
+  ```
+
 - **Resetting to Clean Slate**:
   Removing `data/billing.db` will cause the application to re-initialize an empty database seeded from `menu.csv` on next boot.

@@ -41,18 +41,8 @@ fn fixture() -> (App, PathBuf) {
     }];
     let app = App {
         items: vec![
-            MenuItem {
-                category: "Food".into(),
-                name: "Samosa".into(),
-                unit: "1 pc".into(),
-                price: 20.0,
-            },
-            MenuItem {
-                category: "Food".into(),
-                name: "Paneer Curry".into(),
-                unit: "plate".into(),
-                price: 100.0,
-            },
+            MenuItem::new("Food", "Samosa", "1 pc", 20.0),
+            MenuItem::new("Food", "Paneer Curry", "plate", 100.0),
         ],
         orders: Vec::new(),
         active_order: 0,
@@ -67,6 +57,7 @@ fn fixture() -> (App, PathBuf) {
             name: "Student".into(),
             discount_percent: 10.0,
         }],
+        upi_id: "test@upi".into(),
         menu_index: 0,
         search: String::new(),
         focus: Focus::Menu,
@@ -87,6 +78,12 @@ fn fixture() -> (App, PathBuf) {
         show_help: false,
         table_input: String::new(),
         table_search_index: 0,
+        bill_search_query: String::new(),
+        bill_search_results: Vec::new(),
+        bill_search_index: 0,
+        item_note_buffer: String::new(),
+        table_move_target_index: 0,
+        daily_report_summary: None,
     };
     (app, database_path)
 }
@@ -448,4 +445,205 @@ fn paid_bill_updates_payment_mode_across_bill_receipt_recent_and_db() {
     assert!(app.recent_bills[0].receipt.contains("Payment: CARD"));
 
     let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn pos_features_kot_and_item_notes() {
+    let (mut app, database_path) = fixture();
+    app.open_table_order();
+    app.add_selected_to_cart();
+    assert_eq!(app.order().cart.len(), 1);
+
+    // Add note to item
+    app.open_item_note_prompt();
+    assert_eq!(app.focus, Focus::ItemNote);
+    app.item_note_buffer = "Less spicy, extra crisp".to_string();
+    app.handle_key(KeyCode::Enter);
+    assert_eq!(app.focus, Focus::Menu);
+    assert_eq!(
+        app.order().cart[0].note.as_deref(),
+        Some("Less spicy, extra crisp")
+    );
+
+    // Generate KOT
+    app.generate_kot();
+    assert_eq!(app.order().kot_sent_count, 1);
+    let kot_text = dinein_takeout_billing::receipts::render_kot(app.order(), false);
+    assert!(kot_text.contains("KITCHEN ORDER TICKET"));
+    assert!(kot_text.contains("↳ Less spicy, extra crisp"));
+    assert!(!kot_text.contains("REPRINT"));
+
+    // Second KOT should mark as REPRINT
+    let kot_reprint = dinein_takeout_billing::receipts::render_kot(app.order(), true);
+    assert!(kot_reprint.contains("[REPRINT]"));
+
+    // Receipt should also contain note
+    let receipt = render_receipt(app.order(), None, &app.gst_number);
+    assert!(receipt.contains("↳ Less spicy, extra crisp"));
+
+    let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn pos_features_86_stock_toggle() {
+    let (mut app, database_path) = fixture();
+    assert!(app.items[0].is_available);
+
+    // Toggle out of stock
+    app.focus = Focus::Menu;
+    app.menu_index = 0;
+    app.handle_key(KeyCode::Char('o'));
+    assert!(!app.items[0].is_available);
+
+    // Try to add out-of-stock item
+    app.open_table_order();
+    app.focus = Focus::Menu;
+    app.handle_key(KeyCode::Enter);
+    assert!(app.order().cart.is_empty(), "Item was out of stock!");
+
+    // Render menu UI and verify 86 OUT badge
+    let backend = TestBackend::new(80, 25);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| ui(frame, &app)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("[86 OUT]"));
+
+    // Toggle back to available and add to cart
+    app.handle_key(KeyCode::Char('o'));
+    assert!(app.items[0].is_available);
+    app.handle_key(KeyCode::Enter);
+    assert_eq!(app.order().cart.len(), 1);
+
+    let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn pos_features_table_move_and_merge() {
+    let (mut app, database_path) = fixture();
+    app.areas[0].table_count = 3;
+    app.rebuild_physical_tables();
+
+    // Table 1: Samosa
+    app.selected_table_index = 0;
+    app.open_table_order();
+    app.add_selected_to_cart();
+    let t1_id = app.order().id;
+    assert_eq!(app.order().table_number, Some(1));
+
+    // Table 2: Paneer Curry
+    app.selected_table_index = 1;
+    app.open_table_order();
+    app.menu_index = 1;
+    app.add_selected_to_cart();
+    let t2_id = app.order().id;
+    assert_eq!(app.order().table_number, Some(2));
+    assert_eq!(app.orders.len(), 2);
+
+    // Select Table 1 and Move to Table 3 (empty -> transfer)
+    app.selected_table_index = 0;
+    app.open_table_move();
+    assert_eq!(app.focus, Focus::TableMove);
+    // Target index: Table 3 is index 1 among targets (targets exclude Table 1)
+    let targets = app.table_move_targets();
+    let t3_idx = targets.iter().position(|t| t.table_number == 3).unwrap();
+    app.table_move_target_index = t3_idx;
+    app.execute_table_move_or_merge();
+
+    let moved_order = app.orders.iter().find(|o| o.id == t1_id).unwrap();
+    assert_eq!(moved_order.table_number, Some(3));
+    assert_eq!(app.physical_tables[0].status, TableStatus::Ready);
+    assert_eq!(app.physical_tables[2].status, TableStatus::Ordering);
+
+    // Now merge Table 3 into Table 2
+    app.selected_table_index = 2; // Table 3
+    app.open_table_move();
+    let targets2 = app.table_move_targets();
+    let t2_idx = targets2.iter().position(|t| t.table_number == 2).unwrap();
+    app.table_move_target_index = t2_idx;
+    app.execute_table_move_or_merge();
+
+    assert_eq!(app.orders.len(), 1);
+    let merged_order = &app.orders[0];
+    assert_eq!(merged_order.id, t2_id);
+    assert_eq!(merged_order.cart.len(), 2); // Samosa + Paneer Curry
+    assert_eq!(app.physical_tables[2].status, TableStatus::Ready);
+
+    let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn pos_features_upi_qr_z_report_and_bill_search() {
+    let (mut app, database_path) = fixture();
+    app.open_table_order();
+    app.add_selected_to_cart();
+    let order_id = app.order().id;
+
+    // Test Dynamic UPI QR code generation
+    let (uri, blocks, amount) = app.upi_qr_uri_and_blocks().expect("UPI QR generation");
+    assert!(uri.starts_with("upi://pay?pa=test@upi"));
+    assert!(!blocks.is_empty());
+    assert!(amount > 0.0);
+
+    // Complete billing via UPI
+    app.complete_billing("9876543210", None);
+    app.select_payment_mode(PaymentMode::Upi);
+    app.close_order();
+    app.handle_key(KeyCode::Enter);
+
+    // Test Daily Sales Summary (Z-Report)
+    app.open_daily_report();
+    assert_eq!(app.focus, Focus::DailyReport);
+    let summary = app.daily_report_summary.as_ref().unwrap();
+    assert_eq!(summary.total_orders, 1);
+    assert_eq!(summary.upi_count, 1);
+    assert!(summary.total_sales > 0.0);
+    app.print_daily_report();
+
+    // Test Bill Search & Reprint
+    app.open_bill_search();
+    assert_eq!(app.focus, Focus::BillSearch);
+    assert_eq!(app.bill_search_results.len(), 1);
+    assert_eq!(app.bill_search_results[0].id, order_id);
+
+    app.bill_search_query = "98765".to_string();
+    app.update_bill_search();
+    assert_eq!(app.bill_search_results.len(), 1);
+
+    app.reprint_selected_historical_bill();
+
+    // UI render of modals
+    let backend = TestBackend::new(80, 25);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    app.focus = Focus::DailyReport;
+    terminal.draw(|frame| ui(frame, &app)).unwrap();
+
+    app.focus = Focus::BillSearch;
+    terminal.draw(|frame| ui(frame, &app)).unwrap();
+
+    let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn pos_features_daily_backup_creation() {
+    let db_path = test_path("backup_test.db");
+    let _ = fs::write(&db_path, b"mock sqlite database file");
+    Database::create_daily_backup(&db_path);
+
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let backup_file = db_path
+        .parent()
+        .unwrap()
+        .join("backups")
+        .join(format!("billing_{today}.db"));
+    assert!(backup_file.exists());
+
+    let _ = fs::remove_file(db_path);
+    let _ = fs::remove_file(backup_file);
 }

@@ -23,7 +23,11 @@ use crate::{
         floor_plan::render_tabs,
         footer::render_footer,
         menu::render_menu,
-        modals::{render_help, render_mobile_entry, render_offer_select, render_payment_mode},
+        modals::{
+            render_bill_search, render_daily_report, render_help, render_item_note,
+            render_mobile_entry, render_offer_select, render_payment_mode, render_table_move,
+            render_upi_qr,
+        },
         notifications::render_notification,
         recent_bills::render_recent_bills,
         search::render_search,
@@ -83,6 +87,21 @@ pub fn ui(f: &mut Frame, app: &App) {
     }
     if app.focus == Focus::OfferSelect {
         render_offer_select(f, app);
+    }
+    if app.focus == Focus::DailyReport {
+        render_daily_report(f, app);
+    }
+    if app.focus == Focus::BillSearch {
+        render_bill_search(f, app);
+    }
+    if app.focus == Focus::UpiQr {
+        render_upi_qr(f, app);
+    }
+    if app.focus == Focus::TableMove {
+        render_table_move(f, app);
+    }
+    if app.focus == Focus::ItemNote {
+        render_item_note(f, app);
     }
     if app.show_help {
         render_help(f, app);

@@ -6,15 +6,31 @@ use chrono::{DateTime, Local};
 #[allow(dead_code)]
 pub const CLEANING_MINUTES: i64 = 10;
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MenuItem {
     pub category: String,
     pub name: String,
     pub unit: String,
     pub price: f64,
+    pub is_available: bool,
 }
 
 impl MenuItem {
+    pub fn new(
+        category: impl Into<String>,
+        name: impl Into<String>,
+        unit: impl Into<String>,
+        price: f64,
+    ) -> Self {
+        Self {
+            category: category.into(),
+            name: name.into(),
+            unit: unit.into(),
+            price,
+            is_available: true,
+        }
+    }
+
     pub fn to_csv_row(&self) -> Vec<String> {
         vec![
             self.category.clone(),
@@ -25,14 +41,24 @@ impl MenuItem {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CartLine {
     pub name: String,
     pub unit_price: f64,
     pub qty: u32,
+    pub note: Option<String>,
 }
 
 impl CartLine {
+    pub fn new(name: impl Into<String>, unit_price: f64, qty: u32) -> Self {
+        Self {
+            name: name.into(),
+            unit_price,
+            qty,
+            note: None,
+        }
+    }
+
     pub fn total(&self) -> f64 {
         self.unit_price * self.qty as f64
     }
@@ -133,6 +159,11 @@ pub enum Focus {
     /// Modal selection of a discount offer to apply at billing.
     OfferSelect,
     TableJump,
+    DailyReport,
+    BillSearch,
+    UpiQr,
+    TableMove,
+    ItemNote,
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -346,6 +377,7 @@ pub struct Order {
     pub status: OrderStatus,
     pub customer_mobile: Option<String>,
     pub payment_mode: Option<PaymentMode>,
+    pub kot_sent_count: usize,
 }
 
 impl Order {
@@ -396,6 +428,44 @@ pub struct BillSummary {
     pub payment_mode: Option<PaymentMode>,
 }
 
+/// Aggregated end-of-day or shift sales report (Z-Report).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DailySalesSummary {
+    pub date: String,
+    pub total_orders: usize,
+    pub dine_in_orders: usize,
+    pub takeout_orders: usize,
+    pub subtotal: f64,
+    pub discount: f64,
+    pub ac_charge: f64,
+    pub tax: f64,
+    pub total_sales: f64,
+    pub upi_count: usize,
+    pub upi_total: f64,
+    pub cash_count: usize,
+    pub cash_total: f64,
+    pub card_count: usize,
+    pub card_total: f64,
+    pub person_credit_count: usize,
+    pub person_credit_total: f64,
+    pub have_it_on_hotel_count: usize,
+    pub have_it_on_hotel_total: f64,
+    pub other_count: usize,
+    pub other_total: f64,
+}
+
+/// Summary item for historical bill search.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoricalBill {
+    pub id: u32,
+    pub label: String,
+    pub service: Service,
+    pub customer_mobile: String,
+    pub total: f64,
+    pub payment_mode: Option<PaymentMode>,
+    pub created_at: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Area, CartLine, Order, OrderStatus, Service, CLEANING_MINUTES};
@@ -410,25 +480,18 @@ mod tests {
             is_ac,
             ac_rate,
             discount_percent: 0.0,
-            cart: vec![CartLine {
-                name: "Dal Makhani".to_string(),
-                unit_price: 100.0,
-                qty: 2,
-            }],
+            cart: vec![CartLine::new("Dal Makhani", 100.0, 2)],
             cart_index: 0,
             status: OrderStatus::Ordering,
             customer_mobile: None,
             payment_mode: None,
+            kot_sent_count: 0,
         }
     }
 
     #[test]
     fn cart_line_total_uses_quantity() {
-        let line = CartLine {
-            name: "Samosa".to_string(),
-            unit_price: 20.0,
-            qty: 3,
-        };
+        let line = CartLine::new("Samosa", 20.0, 3);
 
         assert_eq!(line.total(), 60.0);
     }

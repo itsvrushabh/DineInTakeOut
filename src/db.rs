@@ -14,18 +14,19 @@ use tokio::sync::Mutex;
 use turso::{Connection, Row, Value};
 
 use crate::models::{
-    Area, BillSummary, BillTotals, CartLine, MenuItem, Offer, Order, OrderStatus, PaymentMode,
-    PhysicalTable, Service, TableStatus, CLEANING_MINUTES,
+    Area, BillSummary, BillTotals, CartLine, DailySalesSummary, HistoricalBill, MenuItem, Offer,
+    Order, OrderStatus, PaymentMode, PhysicalTable, Service, TableStatus, CLEANING_MINUTES,
 };
 
 const TIMESTAMP_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 
 const SCHEMA: [&str; 9] = [
     "CREATE TABLE IF NOT EXISTS menu_items (
-         name     TEXT PRIMARY KEY,
-         category TEXT NOT NULL,
-         unit     TEXT NOT NULL DEFAULT '',
-         price    REAL NOT NULL CHECK (price >= 0)
+         name         TEXT PRIMARY KEY,
+         category     TEXT NOT NULL,
+         unit         TEXT NOT NULL DEFAULT '',
+         price        REAL NOT NULL CHECK (price >= 0),
+         is_available INTEGER NOT NULL DEFAULT 1
      )",
     "CREATE TABLE IF NOT EXISTS orders (
          id              INTEGER PRIMARY KEY,
@@ -49,7 +50,8 @@ const SCHEMA: [&str; 9] = [
          name       TEXT NOT NULL,
          unit_price REAL NOT NULL,
          qty        INTEGER NOT NULL CHECK (qty > 0),
-         line_total REAL NOT NULL
+         line_total REAL NOT NULL,
+         notes      TEXT NOT NULL DEFAULT ''
      )",
     "CREATE TABLE IF NOT EXISTS open_orders (
          id           INTEGER PRIMARY KEY,
@@ -67,6 +69,7 @@ const SCHEMA: [&str; 9] = [
          name       TEXT NOT NULL,
          unit_price REAL NOT NULL,
          qty        INTEGER NOT NULL CHECK (qty > 0),
+         notes      TEXT NOT NULL DEFAULT '',
          PRIMARY KEY (order_id, position)
      )",
     "CREATE TABLE IF NOT EXISTS tables (
@@ -114,6 +117,7 @@ impl Database {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
         }
+        Self::create_daily_backup(path);
         let rt = Self::runtime()?;
         let db = rt
             .block_on(turso::Builder::new_local(&path.display().to_string()).build())
@@ -125,6 +129,19 @@ impl Database {
         };
         database.init_schema()?;
         Ok(database)
+    }
+
+    pub fn create_daily_backup(path: &Path) {
+        if !path.exists() {
+            return;
+        }
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let backup_dir = path.parent().unwrap_or(Path::new("data")).join("backups");
+        let _ = std::fs::create_dir_all(&backup_dir);
+        let backup_file = backup_dir.join(format!("billing_{date}.db"));
+        if !backup_file.exists() {
+            let _ = std::fs::copy(path, backup_file);
+        }
     }
 
     fn runtime() -> Result<Runtime, String> {
@@ -178,6 +195,26 @@ impl Database {
                     (),
                 )
                 .await;
+            // Migration for item availability
+            let _ = conn
+                .execute(
+                    "ALTER TABLE menu_items ADD COLUMN is_available INTEGER NOT NULL DEFAULT 1",
+                    (),
+                )
+                .await;
+            // Migration for item notes
+            let _ = conn
+                .execute(
+                    "ALTER TABLE order_items ADD COLUMN notes TEXT NOT NULL DEFAULT ''",
+                    (),
+                )
+                .await;
+            let _ = conn
+                .execute(
+                    "ALTER TABLE open_order_items ADD COLUMN notes TEXT NOT NULL DEFAULT ''",
+                    (),
+                )
+                .await;
 
             // Seed the dynamic configuration the first time the schema exists.
             Self::seed_defaults(&conn).await;
@@ -192,7 +229,7 @@ impl Database {
             let conn = self.conn.lock().await;
             let mut rows = match conn
                 .query(
-                    "SELECT category, name, unit, price FROM menu_items ORDER BY rowid",
+                    "SELECT category, name, unit, price, is_available FROM menu_items ORDER BY rowid",
                     (),
                 )
                 .await
@@ -207,6 +244,7 @@ impl Database {
                     name: row_string(&row, 1),
                     unit: row_string(&row, 2),
                     price: row_f64(&row, 3),
+                    is_available: row_i64(&row, 4) != 0,
                 });
             }
             items
@@ -215,6 +253,23 @@ impl Database {
 
     pub fn menu_is_empty(&self) -> bool {
         self.scalar_i64("SELECT COUNT(*) FROM menu_items") == 0
+    }
+
+    pub fn update_menu_item_availability(
+        &self,
+        name: &str,
+        is_available: bool,
+    ) -> Result<(), String> {
+        self.rt.block_on(async {
+            let conn = self.conn.lock().await;
+            conn.execute(
+                "UPDATE menu_items SET is_available = ?2 WHERE name = ?1",
+                (name, is_available as i64),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+        })
     }
 
     /// Replaces the whole menu catalogue in one transaction.
@@ -227,12 +282,13 @@ impl Database {
                 .map_err(|e| e.to_string())?;
             for item in items {
                 tx.execute(
-                    "INSERT INTO menu_items (name, category, unit, price) VALUES (?1, ?2, ?3, ?4)",
+                    "INSERT INTO menu_items (name, category, unit, price, is_available) VALUES (?1, ?2, ?3, ?4, ?5)",
                     (
                         item.name.clone(),
                         item.category.clone(),
                         item.unit.clone(),
                         item.price,
+                        item.is_available as i64,
                     ),
                 )
                 .await
@@ -472,14 +528,15 @@ impl Database {
 
             for line in &order.cart {
                 tx.execute(
-                    "INSERT INTO order_items (order_id, name, unit_price, qty, line_total)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    "INSERT INTO order_items (order_id, name, unit_price, qty, line_total, notes)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     (
                         i64::from(order.id),
                         line.name.clone(),
                         line.unit_price,
                         i64::from(line.qty),
                         line.total(),
+                        line.note.as_deref().unwrap_or(""),
                     ),
                 )
                 .await
@@ -537,14 +594,15 @@ impl Database {
             .map_err(|e| e.to_string())?;
             for (position, line) in order.cart.iter().enumerate() {
                 tx.execute(
-                    "INSERT INTO open_order_items (order_id, position, name, unit_price, qty)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    "INSERT INTO open_order_items (order_id, position, name, unit_price, qty, notes)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     (
                         i64::from(order.id),
                         position as i64,
                         line.name.clone(),
                         line.unit_price,
                         i64::from(line.qty),
+                        line.note.as_deref().unwrap_or(""),
                     ),
                 )
                 .await
@@ -618,17 +676,23 @@ impl Database {
                 let mut cart = Vec::new();
                 if let Ok(mut item_rows) = conn
                     .query(
-                        "SELECT name, unit_price, qty FROM open_order_items
+                        "SELECT name, unit_price, qty, notes FROM open_order_items
                          WHERE order_id = ?1 ORDER BY position",
                         [i64::from(header.id)],
                     )
                     .await
                 {
                     while let Ok(Some(item)) = item_rows.next().await {
+                        let note_str = row_string(&item, 3);
                         cart.push(CartLine {
                             name: row_string(&item, 0),
                             unit_price: row_f64(&item, 1),
                             qty: row_i64(&item, 2) as u32,
+                            note: if note_str.is_empty() {
+                                None
+                            } else {
+                                Some(note_str)
+                            },
                         });
                     }
                 }
@@ -647,9 +711,228 @@ impl Database {
                     status: header.status,
                     customer_mobile: None,
                     payment_mode: None,
+                    kot_sent_count: 0,
                 });
             }
             orders
+        })
+    }
+
+    // -- reports & historical bills -------------------------------------------
+
+    pub fn get_daily_sales_summary(&self, date_prefix: &str) -> DailySalesSummary {
+        let sql = format!(
+            "SELECT service, subtotal, discount, ac_charge, tax, total, payment_mode
+             FROM orders WHERE substr(created_at, 1, 10) = '{date_prefix}'"
+        );
+        self.rt.block_on(async {
+            let conn = self.conn.lock().await;
+            let mut summary = DailySalesSummary {
+                date: date_prefix.to_string(),
+                ..Default::default()
+            };
+            let mut rows = match conn.query(&sql, ()).await {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("QUERY ERROR IN GET_DAILY_SALES: {e}");
+                    return summary;
+                }
+            };
+
+            loop {
+                let next_res = rows.next().await;
+                match next_res {
+                    Ok(Some(row)) => {
+                        summary.total_orders += 1;
+                        let srv = Service::parse(&row_string(&row, 0));
+                        if srv == Some(Service::DineIn) {
+                            summary.dine_in_orders += 1;
+                        } else {
+                            summary.takeout_orders += 1;
+                        }
+                        summary.subtotal += row_f64(&row, 1);
+                        summary.discount += row_f64(&row, 2);
+                        summary.ac_charge += row_f64(&row, 3);
+                        summary.tax += row_f64(&row, 4);
+                        let total = row_f64(&row, 5);
+                        summary.total_sales += total;
+
+                        let mode_str = row_string(&row, 6);
+                        let mode = PaymentMode::parse(&mode_str);
+                        match mode {
+                            Some(PaymentMode::Upi) => {
+                                summary.upi_count += 1;
+                                summary.upi_total += total;
+                            }
+                            Some(PaymentMode::Cash) => {
+                                summary.cash_count += 1;
+                                summary.cash_total += total;
+                            }
+                            Some(PaymentMode::Card) => {
+                                summary.card_count += 1;
+                                summary.card_total += total;
+                            }
+                            Some(PaymentMode::PersonCredit) => {
+                                summary.person_credit_count += 1;
+                                summary.person_credit_total += total;
+                            }
+                            Some(PaymentMode::HaveItOnHotel) => {
+                                summary.have_it_on_hotel_count += 1;
+                                summary.have_it_on_hotel_total += total;
+                            }
+                            None => {
+                                summary.other_count += 1;
+                                summary.other_total += total;
+                            }
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(e) => {
+                        eprintln!("ROW ERROR IN GET_DAILY_SALES: {e}");
+                        break;
+                    }
+                }
+            }
+            summary
+        })
+    }
+
+    pub fn search_bills(&self, query: &str) -> Vec<HistoricalBill> {
+        let query = query.trim();
+        self.rt.block_on(async {
+            let conn = self.conn.lock().await;
+            let mut rows = if query.is_empty() {
+                match conn
+                    .query(
+                        "SELECT id, label, service, customer_mobile, total, payment_mode, created_at
+                         FROM orders ORDER BY id DESC LIMIT 50",
+                        (),
+                    )
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(_) => return Vec::new(),
+                }
+            } else {
+                let pattern = format!("%{query}%");
+                match conn
+                    .query(
+                        "SELECT id, label, service, customer_mobile, total, payment_mode, created_at
+                         FROM orders
+                         WHERE CAST(id AS TEXT) LIKE ?1 OR customer_mobile LIKE ?1 OR label LIKE ?1
+                         ORDER BY id DESC LIMIT 50",
+                        [pattern],
+                    )
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(_) => return Vec::new(),
+                }
+            };
+
+            let mut bills = Vec::new();
+            while let Ok(Some(row)) = rows.next().await {
+                let payment_mode = PaymentMode::parse(&row_string(&row, 5));
+                bills.push(HistoricalBill {
+                    id: row_i64(&row, 0) as u32,
+                    label: row_string(&row, 1),
+                    service: Service::parse(&row_string(&row, 2)).unwrap_or(Service::DineIn),
+                    customer_mobile: row_string(&row, 3),
+                    total: row_f64(&row, 4),
+                    payment_mode,
+                    created_at: row_string(&row, 6),
+                });
+            }
+            bills
+        })
+    }
+
+    pub fn load_historical_order(&self, order_id: u32) -> Option<Order> {
+        self.rt.block_on(async {
+            let conn = self.conn.lock().await;
+            let mut order_rows = conn
+                .query(
+                    "SELECT id, label, service, table_number, area, customer_mobile, payment_mode, discount, subtotal, ac_charge
+                     FROM orders WHERE id = ?1",
+                    [i64::from(order_id)],
+                )
+                .await
+                .ok()?;
+            let row = order_rows.next().await.ok()??;
+            let id = row_i64(&row, 0) as u32;
+            let label = row_string(&row, 1);
+            let service = Service::parse(&row_string(&row, 2)).unwrap_or(Service::DineIn);
+            let table_number = row_opt_i64(&row, 3).map(|n| n as usize);
+            let area = {
+                let raw = row_string(&row, 4);
+                if raw.is_empty() {
+                    None
+                } else {
+                    Some(raw)
+                }
+            };
+            let customer_mobile = {
+                let m = row_string(&row, 5);
+                if m.is_empty() {
+                    None
+                } else {
+                    Some(m)
+                }
+            };
+            let payment_mode = PaymentMode::parse(&row_string(&row, 6));
+            let discount = row_f64(&row, 7);
+            let subtotal = row_f64(&row, 8);
+            let ac_charge = row_f64(&row, 9);
+            let is_ac = ac_charge > 0.0;
+            let ac_rate = if is_ac && (subtotal - discount) > 0.0 {
+                ac_charge / (subtotal - discount)
+            } else {
+                0.0
+            };
+            let discount_percent = if subtotal > 0.0 {
+                (discount / subtotal) * 100.0
+            } else {
+                0.0
+            };
+
+            let mut item_rows = conn
+                .query(
+                    "SELECT name, unit_price, qty, notes FROM order_items WHERE order_id = ?1 ORDER BY id",
+                    [i64::from(order_id)],
+                )
+                .await
+                .ok()?;
+            let mut cart = Vec::new();
+            while let Ok(Some(item)) = item_rows.next().await {
+                let note_str = row_string(&item, 3);
+                cart.push(CartLine {
+                    name: row_string(&item, 0),
+                    unit_price: row_f64(&item, 1),
+                    qty: row_i64(&item, 2) as u32,
+                    note: if note_str.is_empty() {
+                        None
+                    } else {
+                        Some(note_str)
+                    },
+                });
+            }
+
+            Some(Order {
+                id,
+                label,
+                service,
+                table_number,
+                area,
+                is_ac,
+                ac_rate,
+                discount_percent,
+                cart,
+                cart_index: 0,
+                status: OrderStatus::Paid,
+                customer_mobile,
+                payment_mode,
+                kot_sent_count: 0,
+            })
         })
     }
 
@@ -906,21 +1189,14 @@ mod tests {
             ac_rate: 0.0,
             discount_percent: 0.0,
             cart: vec![
-                CartLine {
-                    name: "Samosa".to_string(),
-                    unit_price: 20.0,
-                    qty: 2,
-                },
-                CartLine {
-                    name: "Cutting Chai / Special Tea".to_string(),
-                    unit_price: 15.0,
-                    qty: 1,
-                },
+                CartLine::new("Samosa", 20.0, 2),
+                CartLine::new("Cutting Chai / Special Tea", 15.0, 1),
             ],
             cart_index: 0,
             status: OrderStatus::Paid,
             customer_mobile: None,
             payment_mode: None,
+            kot_sent_count: 0,
         }
     }
 
@@ -929,19 +1205,20 @@ mod tests {
         let db = Database::open_for_tests();
         assert!(db.menu_is_empty());
 
-        db.replace_menu(&[MenuItem {
-            category: "Desserts".to_string(),
-            name: "Gulab Jamun".to_string(),
-            unit: "2 pcs".to_string(),
-            price: 45.0,
-        }])
-        .unwrap();
+        db.replace_menu(&[MenuItem::new("Desserts", "Gulab Jamun", "2 pcs", 45.0)])
+            .unwrap();
         assert!(!db.menu_is_empty());
 
         let items = db.load_menu();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].name, "Gulab Jamun");
         assert_eq!(items[0].price, 45.0);
+        assert!(items[0].is_available);
+
+        db.update_menu_item_availability("Gulab Jamun", false)
+            .unwrap();
+        let items_after = db.load_menu();
+        assert!(!items_after[0].is_available);
     }
 
     #[test]
@@ -998,6 +1275,8 @@ mod tests {
 
         let mut dine_in = sample_order(11);
         dine_in.status = OrderStatus::Serving;
+        let mut line_with_note = CartLine::new("Veg / Chicken Momos", 65.0, 2);
+        line_with_note.note = Some("Extra spicy".to_string());
         let takeout = Order {
             id: 12,
             label: "TK4".to_string(),
@@ -1007,15 +1286,12 @@ mod tests {
             is_ac: false,
             ac_rate: 0.0,
             discount_percent: 0.0,
-            cart: vec![CartLine {
-                name: "Veg / Chicken Momos".to_string(),
-                unit_price: 65.0,
-                qty: 2,
-            }],
+            cart: vec![line_with_note],
             cart_index: 0,
             status: OrderStatus::Ordering,
             customer_mobile: None,
             payment_mode: None,
+            kot_sent_count: 0,
         };
 
         db.save_open_order(&dine_in).unwrap();
@@ -1025,11 +1301,7 @@ mod tests {
         assert_eq!(db.next_bill_number(), 13);
 
         // Upsert with an extra line must replace the stored cart, not append.
-        dine_in.cart.push(CartLine {
-            name: "Gulab Jamun".to_string(),
-            unit_price: 45.0,
-            qty: 1,
-        });
+        dine_in.cart.push(CartLine::new("Gulab Jamun", 45.0, 1));
         db.save_open_order(&dine_in).unwrap();
 
         let restored = db.load_open_orders();
@@ -1045,6 +1317,7 @@ mod tests {
         let tk = restored.iter().find(|o| o.id == 12).unwrap();
         assert_eq!(tk.service, Service::TakeOut);
         assert!(tk.area.is_none());
+        assert_eq!(tk.cart[0].note.as_deref(), Some("Extra spicy"));
 
         db.delete_open_order(11).unwrap();
         let after = db.load_open_orders();
@@ -1102,27 +1375,12 @@ mod tests {
     fn replace_menu_clears_previous_rows() {
         let db = Database::open_for_tests();
         db.replace_menu(&[
-            MenuItem {
-                category: "A".to_string(),
-                name: "Old".to_string(),
-                unit: String::new(),
-                price: 10.0,
-            },
-            MenuItem {
-                category: "A".to_string(),
-                name: "Newer".to_string(),
-                unit: String::new(),
-                price: 12.0,
-            },
+            MenuItem::new("A", "Old", "", 10.0),
+            MenuItem::new("A", "Newer", "", 12.0),
         ])
         .unwrap();
-        db.replace_menu(&[MenuItem {
-            category: "B".to_string(),
-            name: "Only".to_string(),
-            unit: String::new(),
-            price: 99.0,
-        }])
-        .unwrap();
+        db.replace_menu(&[MenuItem::new("B", "Only", "", 99.0)])
+            .unwrap();
 
         let items = db.load_menu();
         assert_eq!(items.len(), 1);
@@ -1145,5 +1403,32 @@ mod tests {
             db.scalar_optional_string("SELECT area FROM orders WHERE id = 3"),
             None
         );
+    }
+
+    #[test]
+    fn daily_sales_summary_and_historical_search() {
+        let db = Database::open_for_tests();
+        let mut order1 = sample_order(101);
+        order1.payment_mode = Some(crate::models::PaymentMode::Upi);
+        db.save_paid_order(&order1, "9998887770", &order1.totals())
+            .unwrap();
+
+        let today = Local::now().format("%Y-%m-%d").to_string();
+        let summary = db.get_daily_sales_summary(&today);
+        assert_eq!(summary.total_orders, 1);
+        assert_eq!(summary.dine_in_orders, 1);
+        assert_eq!(summary.upi_count, 1);
+        assert!(summary.total_sales > 0.0);
+
+        let results = db.search_bills("999888");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, 101);
+        assert_eq!(results[0].customer_mobile, "9998887770");
+
+        let loaded = db.load_historical_order(101);
+        assert!(loaded.is_some());
+        let ord = loaded.unwrap();
+        assert_eq!(ord.id, 101);
+        assert_eq!(ord.cart.len(), 2);
     }
 }

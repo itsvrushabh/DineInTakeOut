@@ -19,8 +19,20 @@ pub fn render_menu(f: &mut Frame, app: &App, area: Rect) {
         .map(|(row_i, &idx)| {
             let it = &app.items[idx];
             let selected = row_i == app.menu_index && app.focus == Focus::Menu;
+            let item_cell = if it.is_available {
+                Cell::from(it.name.clone())
+            } else {
+                Cell::from(ratatui::text::Line::from(vec![
+                    Span::styled(it.name.clone(), Style::default().fg(Color::DarkGray)),
+                    Span::raw(" "),
+                    Span::styled(
+                        "[86 OUT]",
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    ),
+                ]))
+            };
             Row::new(vec![
-                Cell::from(it.name.clone()),
+                item_cell,
                 Cell::from(Text::from(it.unit.clone()).alignment(Alignment::Right)),
                 Cell::from(Text::from(money(it.price)).alignment(Alignment::Right)),
             ])
@@ -44,7 +56,11 @@ pub fn render_menu(f: &mut Frame, app: &App, area: Rect) {
     )
     .header(Row::new(vec!["Item", "Unit", "Price"]).bold().underlined())
     .block(Block::default().borders(Borders::ALL).title(Span::styled(
-        " Menu ",
+        if app.focus == Focus::Menu {
+            " Menu (Enter: add · o: 86 toggle stock) "
+        } else {
+            " Menu "
+        },
         if app.focus == Focus::Menu {
             Style::default()
                 .fg(Color::Cyan)

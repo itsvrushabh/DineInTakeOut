@@ -13,8 +13,8 @@ use crate::{
     },
     db::Database,
     models::{
-        Area, BillSummary, CartLine, Focus, MenuItem, Offer, Order, OrderStatus, PaymentMode,
-        PhysicalTable, Service, TableStatus, CLEANING_MINUTES,
+        Area, BillSummary, CartLine, DailySalesSummary, Focus, HistoricalBill, MenuItem, Offer,
+        Order, OrderStatus, PaymentMode, PhysicalTable, Service, TableStatus, CLEANING_MINUTES,
     },
     receipts::render_receipt,
 };
@@ -32,6 +32,7 @@ pub struct App {
     pub gst_number: String,                  // registered GSTIN printed on receipts
     pub ac_rate: f64,                        // AC surcharge rate (fraction) for AC areas
     pub offers: Vec<Offer>,                  // discount offers selectable at billing
+    pub upi_id: String,                      // UPI VPA address for QR payments
     pub menu_index: usize,
     pub search: String,
     pub focus: Focus,
@@ -52,6 +53,22 @@ pub struct App {
     pub show_help: bool,
     pub table_input: String,
     pub table_search_index: usize,
+    pub bill_search_query: String,
+    pub bill_search_results: Vec<HistoricalBill>,
+    pub bill_search_index: usize,
+    pub item_note_buffer: String,
+    pub table_move_target_index: usize,
+    pub daily_report_summary: Option<DailySalesSummary>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableDestination {
+    pub area_name: String,
+    pub table_number: usize,
+    pub is_ac: bool,
+    pub status: TableStatus,
+    pub order_id: Option<u32>,
+    pub order_label: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -116,14 +133,29 @@ impl App {
 
         // Restore config, unpaid orders and physical table states from the last run.
         let now = Local::now();
-        let (areas, gst_number, ac_rate, offers) = match &database {
-            Some(db) => (
-                db.load_areas(),
-                db.get_setting("gst_number"),
-                db.get_setting("ac_rate").parse().unwrap_or(0.06),
-                db.load_offers(),
+        let (areas, gst_number, ac_rate, offers, upi_id) = match &database {
+            Some(db) => {
+                let db_upi = db.get_setting("upi_id");
+                let upi = if db_upi.is_empty() {
+                    "restaurant@upi".to_string()
+                } else {
+                    db_upi
+                };
+                (
+                    db.load_areas(),
+                    db.get_setting("gst_number"),
+                    db.get_setting("ac_rate").parse().unwrap_or(0.06),
+                    db.load_offers(),
+                    upi,
+                )
+            }
+            None => (
+                Area::defaults(),
+                String::new(),
+                0.06,
+                Vec::new(),
+                "restaurant@upi".to_string(),
             ),
-            None => (Area::defaults(), String::new(), 0.06, Vec::new()),
         };
 
         let (orders, next_order_id, physical_tables) = match &database {
@@ -185,6 +217,7 @@ impl App {
             gst_number,
             ac_rate,
             offers,
+            upi_id,
             menu_index: 0,
             search: String::new(),
             focus: Focus::Menu,
@@ -205,6 +238,12 @@ impl App {
             show_help: false,
             table_input: String::new(),
             table_search_index: 0,
+            bill_search_query: String::new(),
+            bill_search_results: Vec::new(),
+            bill_search_index: 0,
+            item_note_buffer: String::new(),
+            table_move_target_index: 0,
+            daily_report_summary: None,
         }
     }
     pub fn order_mut(&mut self) -> &mut Order {
@@ -511,6 +550,7 @@ impl App {
                 status: OrderStatus::Ordering,
                 customer_mobile: None,
                 payment_mode: None,
+                kot_sent_count: 0,
             };
 
             self.orders.push(order);
@@ -550,6 +590,7 @@ impl App {
             status: OrderStatus::Ordering,
             customer_mobile: None,
             payment_mode: None,
+            kot_sent_count: 0,
         };
 
         self.orders.push(order);
@@ -764,19 +805,331 @@ impl App {
         let vis = self.visible_items();
         if let Some(&idx) = vis.get(self.menu_index) {
             let item = self.items[idx].clone();
+            if !item.is_available {
+                self.notify(format!("'{}' is currently OUT OF STOCK (86)!", item.name));
+                return;
+            }
             let order = self.order_mut();
             if let Some(line) = order.cart.iter_mut().find(|l| l.name == item.name) {
                 line.qty += 1;
             } else {
-                order.cart.push(CartLine {
-                    name: item.name.clone(),
-                    unit_price: item.price,
-                    qty: 1,
-                });
+                order.cart.push(CartLine::new(&item.name, item.price, 1));
             }
             self.notify(format!("Added {} to {}.", item.name, self.order().label));
             self.persist_active_order();
         }
+    }
+
+    pub fn toggle_selected_menu_item_stock(&mut self) {
+        let vis = self.visible_items();
+        if let Some(&idx) = vis.get(self.menu_index) {
+            let item = &mut self.items[idx];
+            item.is_available = !item.is_available;
+            let name = item.name.clone();
+            let is_avail = item.is_available;
+            if let Some(db) = &self.database {
+                let _ = db.update_menu_item_availability(&name, is_avail);
+            }
+            let status = if is_avail {
+                "AVAILABLE"
+            } else {
+                "OUT OF STOCK (86)"
+            };
+            self.notify(format!("Marked '{name}' as {status}."));
+        }
+    }
+
+    pub fn open_item_note_prompt(&mut self) {
+        if !self.ensure_editable_order() {
+            return;
+        }
+        let order = self.order();
+        if order.cart.is_empty() || order.cart_index >= order.cart.len() {
+            self.notify("No cart line selected to add note.".to_string());
+            return;
+        }
+        self.item_note_buffer = order.cart[order.cart_index]
+            .note
+            .clone()
+            .unwrap_or_default();
+        self.focus_return = self.focus;
+        self.focus = Focus::ItemNote;
+    }
+
+    pub fn save_item_note(&mut self) {
+        let note = self.item_note_buffer.trim().to_string();
+        let order = self.order_mut();
+        if order.cart_index < order.cart.len() {
+            order.cart[order.cart_index].note = if note.is_empty() { None } else { Some(note) };
+            self.persist_active_order();
+            self.notify("Item note updated.".to_string());
+        }
+        self.focus = self.focus_return;
+    }
+
+    pub fn generate_kot(&mut self) {
+        if self.orders.is_empty() {
+            self.notify("No active order for KOT.".to_string());
+            return;
+        }
+        let order = self.order();
+        if order.cart.is_empty() {
+            self.notify("Cart is empty - cannot generate KOT.".to_string());
+            return;
+        }
+        let is_reprint = order.kot_sent_count > 0;
+        let kot_text = crate::receipts::render_kot(order, is_reprint);
+        let path = match crate::receipts::save_kot_to_disk(&kot_text, &order.label, order.id) {
+            Ok(p) => format!("Saved: {}", p.display()),
+            Err(e) => format!("Save error: {e}"),
+        };
+        let _ = crate::receipts::print_receipt_text(&kot_text);
+        let count: u32 = order.cart.iter().map(|l| l.qty).sum();
+        self.order_mut().kot_sent_count += 1;
+        self.notify(format!("KOT sent to kitchen ({count} items). {path}"));
+    }
+
+    pub fn open_daily_report(&mut self) {
+        let today = Local::now().format("%Y-%m-%d").to_string();
+        let summary = if let Some(db) = &self.database {
+            db.get_daily_sales_summary(&today)
+        } else {
+            DailySalesSummary {
+                date: today,
+                ..Default::default()
+            }
+        };
+        self.daily_report_summary = Some(summary);
+        self.focus_return = self.focus;
+        self.focus = Focus::DailyReport;
+    }
+
+    pub fn print_daily_report(&mut self) {
+        if let Some(summary) = &self.daily_report_summary {
+            let text = crate::receipts::render_z_report(
+                summary,
+                "DineIn TakeOut Restaurant",
+                &self.gst_number,
+            );
+            let path = match crate::receipts::save_z_report_to_disk(&text, &summary.date) {
+                Ok(p) => format!("Saved: {}", p.display()),
+                Err(e) => format!("Save error: {e}"),
+            };
+            let _ = crate::receipts::print_receipt_text(&text);
+            self.notify(format!("Z-Report printed! {path}"));
+        }
+    }
+
+    pub fn open_bill_search(&mut self) {
+        self.bill_search_query.clear();
+        self.bill_search_index = 0;
+        self.bill_search_results = if let Some(db) = &self.database {
+            db.search_bills("")
+        } else {
+            Vec::new()
+        };
+        self.focus_return = self.focus;
+        self.focus = Focus::BillSearch;
+    }
+
+    pub fn update_bill_search(&mut self) {
+        self.bill_search_results = if let Some(db) = &self.database {
+            db.search_bills(&self.bill_search_query)
+        } else {
+            Vec::new()
+        };
+        self.bill_search_index = 0;
+    }
+
+    pub fn reprint_selected_historical_bill(&mut self) {
+        if let Some(bill) = self.bill_search_results.get(self.bill_search_index) {
+            let bill_id = bill.id;
+            if let Some(db) = &self.database {
+                if let Some(ord) = db.load_historical_order(bill_id) {
+                    let receipt =
+                        render_receipt(&ord, ord.customer_mobile.as_deref(), &self.gst_number);
+                    let _ = crate::receipts::print_receipt_text(&receipt);
+                    self.notify(format!("Reprinted Bill #{bill_id}!"));
+                    return;
+                }
+            }
+            self.notify(format!("Could not load details for Bill #{bill_id}."));
+        }
+    }
+
+    pub fn show_upi_qr(&mut self) {
+        if self.orders.is_empty() {
+            self.notify("No active order for UPI QR.".to_string());
+            return;
+        }
+        self.focus_return = self.focus;
+        self.focus = Focus::UpiQr;
+    }
+
+    pub fn upi_qr_uri_and_blocks(&self) -> Option<(String, Vec<String>, f64)> {
+        if self.orders.is_empty() {
+            return None;
+        }
+        let order = self.order();
+        let totals = order.totals();
+        let uri = format!(
+            "upi://pay?pa={}&pn=DineInTakeOut&am={:.2}&cu=INR&tn=Bill-{}",
+            self.upi_id, totals.total, order.id
+        );
+        match crate::receipts::generate_upi_qr_blocks(&uri) {
+            Ok(blocks) => Some((uri, blocks, totals.total)),
+            Err(_) => None,
+        }
+    }
+
+    pub fn table_move_targets(&self) -> Vec<TableDestination> {
+        let current_area = self.selected_area_name();
+        let current_num = self.selected_table_index + 1;
+        let mut list = Vec::new();
+        for area in &self.areas {
+            for num in 1..=area.table_count {
+                if area.name == current_area && num == current_num {
+                    continue;
+                }
+                let pt = self
+                    .physical_tables
+                    .iter()
+                    .find(|t| t.area == area.name && t.number == num);
+                let status = pt.map_or(TableStatus::Ready, |t| t.status);
+                let order = self.orders.iter().find(|o| {
+                    o.service == Service::DineIn
+                        && o.area.as_deref() == Some(&area.name)
+                        && o.table_number == Some(num)
+                });
+                list.push(TableDestination {
+                    area_name: area.name.clone(),
+                    table_number: num,
+                    is_ac: area.is_ac,
+                    status,
+                    order_id: order.map(|o| o.id),
+                    order_label: order.map(|o| o.label.clone()),
+                });
+            }
+        }
+        list
+    }
+
+    pub fn open_table_move(&mut self) {
+        let source_order = self.selected_table_order();
+        if source_order.is_none() {
+            self.notify("Selected table does not have an active order to move.".to_string());
+            return;
+        }
+        self.table_move_target_index = 0;
+        self.focus_return = self.focus;
+        self.focus = Focus::TableMove;
+    }
+
+    pub fn execute_table_move_or_merge(&mut self) {
+        let targets = self.table_move_targets();
+        if targets.is_empty() {
+            self.focus = Focus::Tables;
+            return;
+        }
+        let target_idx = self.table_move_target_index.min(targets.len() - 1);
+        let target = targets[target_idx].clone();
+
+        let source_area = self.selected_area_name();
+        let source_number = self.selected_table_index + 1;
+        let Some(source_order_pos) = self.orders.iter().position(|o| {
+            o.service == Service::DineIn
+                && o.area.as_deref() == Some(&source_area)
+                && o.table_number == Some(source_number)
+        }) else {
+            self.focus = Focus::Tables;
+            return;
+        };
+
+        if let Some(target_order_id) = target.order_id {
+            // MERGE into target order
+            let source_order = self.orders.remove(source_order_pos);
+            if let Some(target_order) = self.orders.iter_mut().find(|o| o.id == target_order_id) {
+                for src_line in source_order.cart {
+                    if let Some(existing) = target_order
+                        .cart
+                        .iter_mut()
+                        .find(|l| l.name == src_line.name && l.note == src_line.note)
+                    {
+                        existing.qty += src_line.qty;
+                    } else {
+                        target_order.cart.push(src_line);
+                    }
+                }
+            }
+            if let Some(db) = &self.database {
+                let _ = db.delete_open_order(source_order.id);
+            }
+            if let Some(pt) = self
+                .physical_tables
+                .iter_mut()
+                .find(|t| t.area == source_area && t.number == source_number)
+            {
+                pt.status = TableStatus::Ready;
+                pt.order_id = None;
+                self.persist_table(&source_area, source_number);
+            }
+            if let Some(target_order) = self.orders.iter().find(|o| o.id == target_order_id) {
+                if let Some(db) = &self.database {
+                    let _ = db.save_open_order(target_order);
+                }
+            }
+            if let Some(idx) = self.orders.iter().position(|o| o.id == target_order_id) {
+                self.active_order = idx;
+            } else if self.active_order >= self.orders.len() && !self.orders.is_empty() {
+                self.active_order = self.orders.len() - 1;
+            }
+            self.notify(format!(
+                "Merged Table {} into {} Table {}!",
+                source_number, target.area_name, target.table_number
+            ));
+        } else {
+            // TRANSFER to empty table
+            let source_order = &mut self.orders[source_order_pos];
+            let order_id = source_order.id;
+            source_order.area = Some(target.area_name.clone());
+            source_order.table_number = Some(target.table_number);
+            source_order.label = format!(
+                "{}-T{}",
+                target.area_name.split_whitespace().next().unwrap_or("T"),
+                target.table_number
+            );
+            source_order.is_ac = target.is_ac;
+            if target.is_ac {
+                source_order.ac_rate = self.ac_rate;
+            } else {
+                source_order.ac_rate = 0.0;
+            }
+
+            if let Some(pt) = self
+                .physical_tables
+                .iter_mut()
+                .find(|t| t.area == source_area && t.number == source_number)
+            {
+                pt.status = TableStatus::Ready;
+                pt.order_id = None;
+                self.persist_table(&source_area, source_number);
+            }
+            if let Some(pt) = self
+                .physical_tables
+                .iter_mut()
+                .find(|t| t.area == target.area_name && t.number == target.table_number)
+            {
+                pt.status = TableStatus::Ordering;
+                pt.order_id = Some(order_id);
+                self.persist_table(&target.area_name, target.table_number);
+            }
+            self.persist_active_order();
+            self.notify(format!(
+                "Moved Table {} to {} Table {}!",
+                source_number, target.area_name, target.table_number
+            ));
+        }
+        self.focus = Focus::Tables;
     }
 
     pub fn remove_selected_line(&mut self) {
@@ -968,6 +1321,11 @@ impl App {
                 | Focus::PaymentMode
                 | Focus::OfferSelect
                 | Focus::TableJump
+                | Focus::DailyReport
+                | Focus::BillSearch
+                | Focus::UpiQr
+                | Focus::TableMove
+                | Focus::ItemNote
         );
         if matches!(key, KeyCode::Char('q')) && !in_protected {
             return true;
@@ -976,15 +1334,21 @@ impl App {
             return true;
         }
 
-        if matches!(key, KeyCode::Char('?'))
-            && self.focus != Focus::Search
-            && self.focus != Focus::TableJump
-        {
+        let in_text_input = matches!(
+            self.focus,
+            Focus::Search
+                | Focus::TableJump
+                | Focus::MobileEntry
+                | Focus::BillSearch
+                | Focus::ItemNote
+        );
+
+        if matches!(key, KeyCode::Char('?')) && !in_text_input {
             self.show_help = !self.show_help;
             return false;
         }
 
-        if self.focus != Focus::Search && self.focus != Focus::TableJump {
+        if !in_text_input {
             if matches!(key, KeyCode::Char(']')) {
                 if !self.orders.is_empty() {
                     self.active_order = (self.active_order + 1) % self.orders.len();
@@ -998,6 +1362,10 @@ impl App {
                         self.active_order.saturating_add(self.orders.len() - 1) % self.orders.len();
                     self.notify(format!("Switched to {}.", self.order().label));
                 }
+                return false;
+            }
+            if matches!(key, KeyCode::Char('z')) && self.focus != Focus::DailyReport {
+                self.open_daily_report();
                 return false;
             }
         }
@@ -1034,10 +1402,12 @@ impl App {
                 KeyCode::Char('/') => {
                     self.focus = Focus::Search;
                 }
+                KeyCode::Char('o') => self.toggle_selected_menu_item_stock(),
                 KeyCode::Char('c') => self.clear_active_cart(),
                 KeyCode::Char('p') => self.begin_billing(),
                 KeyCode::Char('e') => self.export_config(),
                 KeyCode::Char('i') => self.import_config(),
+                KeyCode::Char('K') => self.generate_kot(),
                 KeyCode::Char('g') => {
                     self.focus = Focus::TableJump;
                     self.table_input.clear();
@@ -1046,13 +1416,13 @@ impl App {
                 _ => {}
             },
             Focus::Cart => match key {
-                KeyCode::Up | KeyCode::Char('k') => {
+                KeyCode::Up | KeyCode::Char('w') => {
                     if !self.orders.is_empty() {
                         let o = self.order_mut();
                         o.cart_index = o.cart_index.saturating_sub(1);
                     }
                 }
-                KeyCode::Down | KeyCode::Char('j') => {
+                KeyCode::Down | KeyCode::Char('s') => {
                     if !self.orders.is_empty() {
                         let o = self.order_mut();
                         if o.cart_index + 1 < o.cart.len() {
@@ -1060,6 +1430,8 @@ impl App {
                         }
                     }
                 }
+                KeyCode::Char('k') | KeyCode::Char('K') => self.generate_kot(),
+                KeyCode::Char('n') => self.open_item_note_prompt(),
                 KeyCode::Char('=') | KeyCode::Char('+') => self.adjust_selected_line_quantity(1),
                 KeyCode::Char('-') => self.adjust_selected_line_quantity(-1),
                 KeyCode::Delete | KeyCode::Char('x') => self.remove_selected_line(),
@@ -1109,6 +1481,9 @@ impl App {
                 KeyCode::Enter => {
                     self.open_table_order();
                 }
+                KeyCode::Char('m') => {
+                    self.open_table_move();
+                }
                 KeyCode::Char('t') => {
                     self.open_takeout_order();
                 }
@@ -1120,6 +1495,9 @@ impl App {
                 }
                 KeyCode::Char('r') => {
                     self.clean_selected_table();
+                }
+                KeyCode::Char('K') => {
+                    self.generate_kot();
                 }
                 KeyCode::Char('g') => {
                     self.focus = Focus::TableJump;
@@ -1147,6 +1525,12 @@ impl App {
                         self.recent_bill_index += 1;
                     }
                 }
+                KeyCode::Char('/') | KeyCode::Char('s') => {
+                    self.open_bill_search();
+                }
+                KeyCode::Char('p') | KeyCode::Char('r') | KeyCode::Enter => {
+                    self.reprint_selected_recent_bill();
+                }
                 KeyCode::Tab => self.focus = Focus::Search,
                 KeyCode::BackTab => self.focus = Focus::Tables,
                 _ => {}
@@ -1172,9 +1556,9 @@ impl App {
                         }
                     } else {
                         self.notify(format!(
-                                "Mobile number needs 10 digits ({} so far, or press Enter on empty to skip).",
-                                self.mobile_buffer.len()
-                            ));
+                            "Mobile number needs 10 digits ({} so far, or press Enter on empty to skip).",
+                            self.mobile_buffer.len()
+                        ));
                     }
                 }
                 KeyCode::Esc => {
@@ -1205,6 +1589,9 @@ impl App {
                 }
                 KeyCode::Char('d') | KeyCode::Char('D') => {
                     self.select_payment_mode(PaymentMode::Card);
+                }
+                KeyCode::Char('q') | KeyCode::Char('Q') => {
+                    self.show_upi_qr();
                 }
                 KeyCode::Enter => {
                     if let Some(mode) = PaymentMode::all().get(self.payment_mode_index) {
@@ -1296,8 +1683,98 @@ impl App {
                 }
                 _ => {}
             },
+            Focus::DailyReport => match key {
+                KeyCode::Char('p') | KeyCode::Char('P') => {
+                    self.print_daily_report();
+                }
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('z') => {
+                    self.focus = self.focus_return;
+                }
+                _ => {}
+            },
+            Focus::BillSearch => match key {
+                KeyCode::Char(c) => {
+                    self.bill_search_query.push(c);
+                    self.update_bill_search();
+                }
+                KeyCode::Backspace => {
+                    self.bill_search_query.pop();
+                    self.update_bill_search();
+                }
+                KeyCode::Up | KeyCode::BackTab => {
+                    self.bill_search_index = self.bill_search_index.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Tab => {
+                    if self.bill_search_index + 1 < self.bill_search_results.len() {
+                        self.bill_search_index += 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    self.reprint_selected_historical_bill();
+                }
+                KeyCode::Esc => {
+                    self.focus = self.focus_return;
+                }
+                _ => {}
+            },
+            Focus::UpiQr => match key {
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('Q') => {
+                    self.focus = self.focus_return;
+                }
+                _ => {}
+            },
+            Focus::TableMove => match key {
+                KeyCode::Up | KeyCode::Left | KeyCode::Char('k') | KeyCode::Char('h') => {
+                    self.table_move_target_index = self.table_move_target_index.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Right | KeyCode::Char('j') | KeyCode::Char('l') => {
+                    let n = self.table_move_targets().len();
+                    if self.table_move_target_index + 1 < n {
+                        self.table_move_target_index += 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    self.execute_table_move_or_merge();
+                }
+                KeyCode::Esc => {
+                    self.focus = Focus::Tables;
+                }
+                _ => {}
+            },
+            Focus::ItemNote => match key {
+                KeyCode::Char(c) => {
+                    self.item_note_buffer.push(c);
+                }
+                KeyCode::Backspace => {
+                    self.item_note_buffer.pop();
+                }
+                KeyCode::Enter => {
+                    self.save_item_note();
+                }
+                KeyCode::Esc => {
+                    self.focus = self.focus_return;
+                }
+                _ => {}
+            },
         }
         false
+    }
+
+    pub fn reprint_selected_recent_bill(&mut self) {
+        if let Some(bill) = self.recent_bills.get(self.recent_bill_index) {
+            let bill_id = bill.id;
+            if let Some(db) = &self.database {
+                if let Some(ord) = db.load_historical_order(bill_id) {
+                    let receipt =
+                        render_receipt(&ord, ord.customer_mobile.as_deref(), &self.gst_number);
+                    let _ = crate::receipts::print_receipt_text(&receipt);
+                    self.notify(format!("Reprinted Bill #{bill_id}!"));
+                    return;
+                }
+            }
+            let _ = crate::receipts::print_receipt_text(&bill.receipt);
+            self.notify(format!("Reprinted Bill #{bill_id}!"));
+        }
     }
 
     pub fn apply_offer_and_bill(&mut self, index: usize) {
@@ -1340,8 +1817,8 @@ impl App {
         let menu_n = export_menu_csv(&menu_p, &self.items).map_err(|e| e.to_string());
         let areas_n = export_areas_csv(&areas_p, &self.areas).map_err(|e| e.to_string());
         let offers_n = export_offers_csv(&offers_p, &self.offers).map_err(|e| e.to_string());
-        let config_ok =
-            export_config_csv(&config_p, &self.gst_number, self.ac_rate).map_err(|e| e.to_string());
+        let config_ok = export_config_csv(&config_p, &self.gst_number, self.ac_rate, &self.upi_id)
+            .map_err(|e| e.to_string());
 
         match (menu_n, areas_n, offers_n, config_ok) {
             (Ok(mn), Ok(an), Ok(on), Ok(())) => self.notify(format!(
@@ -1394,7 +1871,7 @@ impl App {
             }
         };
 
-        let (gst, ac_rate) = match load_config_csv(&config_p) {
+        let (gst, ac_rate, upi_id) = match load_config_csv(&config_p) {
             Ok(map) => (
                 map.get("GSTNumber")
                     .cloned()
@@ -1403,6 +1880,9 @@ impl App {
                     .and_then(|s| s.trim().parse::<f64>().ok())
                     .map(|p| (p / 100.0).clamp(0.0, 1.0))
                     .unwrap_or(self.ac_rate),
+                map.get("UpiId")
+                    .cloned()
+                    .unwrap_or_else(|| self.upi_id.clone()),
             ),
             Err(e) => {
                 self.notify(format!("Config import failed: {e}"));
@@ -1431,6 +1911,10 @@ impl App {
                 self.notify(format!("DB ac sync failed: {e}"));
                 return;
             }
+            if let Err(e) = db.set_setting("upi_id", &upi_id) {
+                self.notify(format!("DB upi sync failed: {e}"));
+                return;
+            }
         }
 
         self.items = items;
@@ -1442,6 +1926,7 @@ impl App {
         };
         self.gst_number = gst;
         self.ac_rate = ac_rate;
+        self.upi_id = upi_id;
         self.rebuild_physical_tables();
         self.notify("Imported configuration from CSV files.".to_string());
     }

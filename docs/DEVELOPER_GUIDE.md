@@ -105,7 +105,7 @@ DineInTakeOut/
 ### Enums
 - **`Service`**: `DineIn` or `TakeOut`. Determines whether dining table rules and AC surcharges apply. Take-out orders always use an 8% GST rate.
 - **`Focus`**: Current UI keyboard focus:
-  `Search`, `Menu`, `Cart`, `Tables`, `RecentBills`, `MobileEntry`, `PaymentMode`, `OfferSelect`, `TableJump`.
+  `Search`, `Menu`, `Cart`, `Tables`, `RecentBills`, `MobileEntry`, `PaymentMode`, `OfferSelect`, `TableJump`, `DailyReport`, `BillSearch`, `UpiQr`, `TableMove`, `ItemNote`.
 - **`OrderStatus`**: `Ordering` → `Serving` → `BillRequested` → `Paid`.
 - **`TableStatus`**: `Ready` (Green), `Ordering` (Yellow), `Serving` (Blue), `BillRequested` (Cyan), `Paid` (Magenta), `Dirty` (Red).
 - **`PaymentMode`**: `Cash`, `Upi`, `Card`, `PersonCredit`, `HaveItOnHotel`.
@@ -114,6 +114,25 @@ DineInTakeOut/
   - `parse(str)`: Reconstructs enum from string.
 
 ### Core Structs
+- **`MenuItem`**:
+  ```rust
+  pub struct MenuItem {
+      pub name: String,
+      pub category: String,
+      pub unit: String,
+      pub price: f64,
+      pub is_available: bool, // Toggled via 'o' ("86" out-of-stock)
+  }
+  ```
+- **`CartLine`**:
+  ```rust
+  pub struct CartLine {
+      pub name: String,
+      pub unit_price: f64,
+      pub qty: usize,
+      pub note: Option<String>, // Attached via 'n'
+  }
+  ```
 - **`Order`**:
   ```rust
   pub struct Order {
@@ -130,26 +149,13 @@ DineInTakeOut/
       pub status: OrderStatus,
       pub customer_mobile: Option<String>,
       pub payment_mode: Option<PaymentMode>,
+      pub kot_sent_count: usize, // Incremented each time KOT is dispatched
   }
   ```
-- **`BillTotals`**:
-  ```rust
-  pub struct BillTotals {
-      pub subtotal: f64,
-      pub discount: f64,
-      pub ac_charge: f64,
-      pub gst_rate: f64,
-      pub gst: f64,
-      pub total: f64,
-  }
-  ```
-  Calculated by `Order::totals()`:
-  - `subtotal = sum(item_price * qty)`
-  - `discount = subtotal * (discount_percent / 100)`
-  - `taxable = subtotal - discount`
-  - `ac_charge = taxable * ac_rate` (only if `is_ac == true`)
-  - `gst = (taxable + ac_charge) * gst_rate` (5% for AC Dine-In, 8% for Take-Out, 0% for non-AC)
-  - `total = taxable + ac_charge + gst`
+- **`DailySalesSummary`**:
+  Aggregated end-of-day / shift metrics: total orders, dine-in orders, takeout orders, gross subtotal, discounts, AC charges, GST collected, net sales, and a vector of `(PaymentMode, f64, usize)` counts.
+- **`HistoricalBill`**:
+  Lightweight record (`id`, `label`, `service`, `customer_mobile`, `total`, `payment_mode`, `created_at`) used for fuzzy search and instant receipt reprinting.
 
 ---
 
@@ -161,15 +167,20 @@ The `App` struct is the central state store holding all active application varia
 - `orders: Vec<Order>`: All in-flight orders (both dine-in and take-out).
 - `active_order: usize`: Index of the currently displayed order.
 - `physical_tables: Vec<PhysicalTable>`: Live map of all physical tables across all rooms.
-- `focus: Focus`: Currently active input target.
+- `focus: Focus`: Currently active input target, including modal states (`DailyReport`, `BillSearch`, `UpiQr`, `TableMove`, `ItemNote`).
 - `close_on_payment: bool`: Flag indicating whether the `PaymentMode` modal was triggered to settle and close the table, or simply to update the payment type on an active paid bill.
 - `table_input: String` & `table_search_index: usize`: Live state for the Table Search/Jump modal (`g`).
+- `upi_id: String`: Configured merchant VPA for dynamic UPI QR generation.
+- `bill_search_query: String`, `bill_search_results: Vec<HistoricalBill>`, `bill_search_index: usize`: State for the historical bill lookup modal (`/` or `s` in Recent Bills).
+- `item_note_buffer: String`: Text editing buffer for item special instructions (`n`).
+- `table_move_target_index: usize`: Selection index for table move/transfer and merge (`m`).
+- `daily_report_summary: Option<DailySalesSummary>`: Cached calculation for the Z-report modal (`z`).
 
 ### Key Event Routing (`App::handle_key`)
 `handle_key(&mut self, key: KeyCode) -> bool` returns `true` when the application should terminate (on `q` or `Esc` when outside modals).
 
 Input routing follows a strict priority:
-1. Modal check (`in_protected`): When in `Search`, `MobileEntry`, `PaymentMode`, `OfferSelect`, or `TableJump`, global single-character shortcuts (like `q`, `c`, `p`) are disabled to avoid accidental triggers while typing.
+1. Modal check (`in_protected`): When in `Search`, `MobileEntry`, `PaymentMode`, `OfferSelect`, `TableJump`, `BillSearch`, `TableMove`, or `ItemNote`, global single-character shortcuts are isolated to text entry.
 2. Help overlay toggle (`?`).
 3. Order cycle navigation (`[` and `]`).
 4. Panel-specific key matching based on `self.focus`.
@@ -180,21 +191,29 @@ Input routing follows a strict priority:
 
 DineInTakeOut uses the **Turso embedded engine**, a modern Rust-native implementation compatible with SQLite.
 
+### Automated Backups on Boot
+During database initialization in `Database::open_local()`, `create_daily_backup()` automatically creates `data/backups/billing_YYYY-MM-DD.db` if today's snapshot does not yet exist.
+
 ### Tokio Async Bridge
 `Database` encapsulates an internal Tokio single-threaded runtime (`tokio::runtime::Runtime`) and a `tokio::sync::Mutex<Connection>`. Public methods on `Database` expose a clean, synchronous API (`save_paid_order(...) -> Result<(), String>`) by executing futures internally via `self.rt.block_on(...)`.
 
-### Database Tables
-1. `menu_items`: Menu catalogue items with name (PK), category, unit, price.
+### Database Tables & Migrations
+1. `menu_items`: Menu catalogue items (`name`, `category`, `unit`, `price`, `is_available`).
 2. `orders`: Historical paid orders archive.
-3. `order_items`: Line items belonging to archived paid orders.
+3. `order_items`: Line items belonging to archived paid orders (`notes`).
 4. `open_orders`: Snapshot of currently active orders.
-5. `open_order_items`: Line items belonging to active orders.
+5. `open_order_items`: Line items belonging to active orders (`notes`).
 6. `physical_tables`: Table state, linked order ID, and cleaning timestamp.
 7. `areas`: Configured dining rooms, AC flags, and capacities.
 8. `offers`: Promotional discount names and percentages.
-9. `settings`: Application configuration key-value pairs (GSTIN, AC rate).
+9. `settings`: Application configuration key-value pairs (`GSTNumber`, `AcRate`, `UpiId`).
 
-For detailed schemas and SQL queries, see [`docs/DATABASE.md`](file:///home/cachyos/Work/DineInTakeOut/docs/DATABASE.md).
+Key specialized queries:
+- `get_daily_sales_summary(date_prefix)`: Aggregates day/shift totals and payment method counts.
+- `search_bills(query)`: Matches against Bill ID or customer mobile number.
+- `update_menu_item_availability(name, available)`: Persists "86" out-of-stock toggles.
+
+For detailed schemas and SQL queries, see [`docs/DATABASE.md`](DATABASE.md).
 
 ---
 
@@ -216,24 +235,37 @@ The root layout calculates vertical constraints dynamically based on terminal he
   - Notifications are compressed to 2 rows.
   - Table info width is capped at `34.min(f.area().width / 2)`.
 
-### Widget Modularity
-- Each UI module is completely stateless with respect to rendering, receiving `&mut Frame` and `&App`.
-- All modal dialogs (`ui/modals.rs`) use `Clear` widgets before drawing borders to prevent background content bleed-through.
+### Modal Views (`ui/modals.rs`)
+- `render_daily_report`: Formatted Z-Report table with sales breakdown and payment metrics.
+- `render_bill_search`: Filtered historical order table with customer mobile and reprint prompt.
+- `render_upi_qr`: High-contrast Unicode half-block QR display with VPA and total amount.
+- `render_table_move`: Table destination selector distinguishing `[MOVE]` (free table) and `[MERGE]` (occupied table).
+- `render_item_note`: Live text buffer for cooking instructions.
+- All modal dialogs use `Clear` widgets before drawing borders to prevent background content bleed-through.
 
 ---
 
-## 7. Receipt Generation & Printing (`receipts.rs`)
+## 7. Receipt Generation, KOT & Printing (`receipts.rs`)
 
 ### 42-Column Thermal Formatting
 Receipts are formatted using fixed-width text matching standard 80mm thermal paper:
 - Width: Exactly 42 characters.
 - Centered restaurant name and header lines.
 - Dynamic payment mode header (`Payment: UPI`).
-- Line items with quantity, unit price, and right-aligned line totals.
+- Line items with quantity, unit price, right-aligned line totals, and kitchen notes (`↳ <note>`).
 - Financial breakdown with right-aligned subtotal, discount, AC surcharge, GST, total, and settlement line (`Paid via                    UPI`).
 
+### Kitchen Order Ticket (KOT)
+`render_kot(order, is_reprint)` generates kitchen-focused 42-column slips:
+- Header indicates `*** KITCHEN ORDER TICKET (KOT) ***` or `*** KITCHEN ORDER TICKET [REPRINT] ***`.
+- Omits prices and taxes to streamline food preparation.
+- Prints special instructions clearly beneath each dish item.
+
+### Dynamic Unicode Half-Block QR Code
+`generate_upi_qr_blocks(uri)` converts an NPCI UPI URI string into high-contrast terminal rows using UTF-8 half-block characters (`▀`, `▄`, `█`, ` `), allowing scanability directly off computer screens without specialized graphical windows.
+
 ### CUPS Printing Integration
-`print_receipt(text)` attempts to spawn `lp` via `std::process::Command`. If `lp` is not in `$PATH` or returns a non-zero exit code, the error is logged without failing the billing transaction.
+`print_receipt_text(text)` attempts to spawn `lp` via `std::process::Command`. If `lp` is not in `$PATH` or returns a non-zero exit code, the error is logged without failing the billing transaction. All output is archived to `bills/`.
 
 ---
 
@@ -284,7 +316,7 @@ cargo build --release
 
 ## 10. Testing Strategy & Test Suite
 
-The test suite provides comprehensive coverage across unit, persistence, and integration layers.
+The test suite provides comprehensive coverage across unit, persistence, and integration layers (33 total automated tests):
 
 ### 1. Unit Tests (`src/models.rs`, `src/config.rs`)
 Test pure domain calculations:
@@ -292,17 +324,17 @@ Test pure domain calculations:
 cargo test models::
 cargo test config::
 ```
-Verifies tax rates, AC surcharge math, quantity adjustments, and CSV serialization.
+Verifies tax rates, AC surcharge math, quantity adjustments, CSV serialization/deserialization, and menu integrity.
 
 ### 2. Embedded Database Tests (`src/db.rs`)
 Tests use isolated in-memory or temporary databases via `Database::open_for_tests()`:
 ```bash
 cargo test db::
 ```
-Verifies table state persistence, open order recovery across restarts, paid order immutability, and bill numbering.
+Verifies table state persistence, open order recovery across restarts, paid order immutability, bill numbering, daily sales summary calculations, item note roundtrips, and bill search queries.
 
 ### 3. Headless TUI Integration Tests (`tests/integration_smoke.rs`)
-Using Ratatui's `TestBackend`, integration tests run virtual terminal sessions:
+Using Ratatui's `TestBackend`, 16 comprehensive integration tests run virtual terminal sessions:
 ```bash
 cargo test --test integration_smoke
 ```
@@ -313,6 +345,14 @@ Covers:
 - Table search and jump modal interactions (`g`).
 - Payment type updates across active bill, receipt text, recent bills, and database.
 - Compact vs standard terminal rendering.
+- Kitchen Order Tickets (KOT) generation, printing, and duplicate/reprint markers.
+- Item cooking notes attachment, cart display (`↳ <note>`), and receipt rendering.
+- Item stock availability ("86") toggling, badge rendering, and cart addition prevention.
+- Table move/transfer to free tables (with automatic tax adjustment) and merging into occupied tables.
+- Dynamic on-screen UPI QR code generation and modal display.
+- Daily Sales Summary (Z-Report) aggregation and text report export.
+- Historical bill search by ID / mobile number and receipt reprinting.
+- Automated daily database backup snapshot creation.
 
 ### Run All Tests
 ```bash
