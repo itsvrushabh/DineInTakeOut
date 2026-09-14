@@ -1330,9 +1330,9 @@ mod tests {
         let now = Local::now();
         let db = Database::open_for_tests();
 
-        let mut dirty_old = PhysicalTable::ready("Front Garden", 1);
+        let mut dirty_old = PhysicalTable::ready("Main Hall", 1);
         dirty_old.status = TableStatus::Dirty;
-        let mut dirty_new = PhysicalTable::ready("Back Garden", 8);
+        let mut dirty_new = PhysicalTable::ready("Garden", 6);
         dirty_new.status = TableStatus::Dirty;
 
         db.upsert_table(&dirty_old).unwrap();
@@ -1341,7 +1341,7 @@ mod tests {
             let conn = db.conn.lock().await;
             conn.execute(
                 "UPDATE tables SET updated_at = datetime('now', '-15 minutes')
-                 WHERE area = 'Front Garden' AND number = 1",
+                 WHERE area = 'Main Hall' AND number = 1",
                 (),
             )
             .await
@@ -1350,19 +1350,19 @@ mod tests {
 
         let loaded = db.load_tables(&Area::defaults(), now);
         assert_eq!(loaded.len(), 2);
-        let fg1 = loaded.iter().find(|t| t.number == 1).unwrap();
-        assert_eq!(fg1.status, TableStatus::Ready);
-        assert!(fg1.dirty_since.is_none());
-        let bg8 = loaded.iter().find(|t| t.number == 8).unwrap();
-        assert_eq!(bg8.status, TableStatus::Dirty);
-        assert!(bg8.dirty_since.is_some());
+        let mh1 = loaded.iter().find(|t| t.number == 1).unwrap();
+        assert_eq!(mh1.status, TableStatus::Ready);
+        assert!(mh1.dirty_since.is_none());
+        let g6 = loaded.iter().find(|t| t.number == 6).unwrap();
+        assert_eq!(g6.status, TableStatus::Dirty);
+        assert!(g6.dirty_since.is_some());
 
         // A table outside the configured layout is ignored.
         db.rt.block_on(async {
             let conn = db.conn.lock().await;
             conn.execute(
                 "INSERT INTO tables (area, number, status, updated_at)
-                 VALUES ('Front Garden', 99, 'READY', datetime('now'))",
+                 VALUES ('Main Hall', 99, 'READY', datetime('now'))",
                 (),
             )
             .await

@@ -6,160 +6,9 @@ use crate::models::{Area, MenuItem, Offer};
 
 pub const CSV_HEADER: [&str; 4] = ["Category", "Item Name", "Unit", "Price"];
 
-/// Default menu — Indian restaurant items with a fixed price chosen from the
-/// standard estimated range. Used to seed an empty menu.
+/// Default menu — empty by default; all menu items are sourced from `menu.csv`.
 pub fn default_menu() -> Vec<MenuItem> {
-    let rows: &[(&str, &str, &str, f64)] = &[
-        ("Breakfast & Snacks", "Samosa", "1-2 pcs", 20.0),
-        ("Breakfast & Snacks", "Vada Pav", "1 pc", 25.0),
-        ("Breakfast & Snacks", "Idli Sambhar", "2 pcs", 35.0),
-        ("Breakfast & Snacks", "Masala Dosa", "1 plate", 60.0),
-        (
-            "Breakfast & Snacks",
-            "Aloo Paratha (with curd/pickle)",
-            "1 plate (1-2 pcs)",
-            45.0,
-        ),
-        (
-            "Breakfast & Snacks",
-            "Chole Bhature",
-            "2 bhature + curry",
-            75.0,
-        ),
-        (
-            "Breakfast & Snacks",
-            "Poori Bhaji / Sabzi",
-            "4 pooris + curry",
-            55.0,
-        ),
-        ("Breads & Rice", "Tawa Roti / Phulka", "Per piece", 10.0),
-        (
-            "Breads & Rice",
-            "Tandoori Roti / Butter Roti",
-            "Per piece",
-            18.0,
-        ),
-        ("Breads & Rice", "Plain / Butter Naan", "Per piece", 35.0),
-        (
-            "Breads & Rice",
-            "Plain Steamed / Jeera Rice",
-            "Full plate",
-            75.0,
-        ),
-        (
-            "Main Course (Veg)",
-            "Dal Tadka / Dal Fry",
-            "Full plate",
-            95.0,
-        ),
-        ("Main Course (Veg)", "Dal Makhani", "Full plate", 120.0),
-        (
-            "Main Course (Veg)",
-            "Aloo Gobi / Jeera Aloo",
-            "Full plate",
-            100.0,
-        ),
-        (
-            "Main Course (Veg)",
-            "Mixed Vegetable Curry",
-            "Full plate",
-            125.0,
-        ),
-        (
-            "Main Course (Veg)",
-            "Paneer Butter Masala",
-            "Full plate",
-            165.0,
-        ),
-        ("Main Course (Veg)", "Palak Paneer", "Full plate", 150.0),
-        ("Main Course (Veg)", "Kadai Paneer", "Full plate", 160.0),
-        (
-            "Main Course (Veg)",
-            "Veg Biryani / Pulao",
-            "Full plate",
-            130.0,
-        ),
-        (
-            "Main Course (Veg)",
-            "Special Veg Thali",
-            "Curry + Dal + 3 Roti + Rice + Sweet",
-            160.0,
-        ),
-        (
-            "Main Course (Non-Veg)",
-            "Egg Curry (with 2 eggs)",
-            "Full plate",
-            110.0,
-        ),
-        (
-            "Main Course (Non-Veg)",
-            "Chicken Curry / Masala",
-            "Full plate",
-            190.0,
-        ),
-        (
-            "Main Course (Non-Veg)",
-            "Butter Chicken",
-            "Full plate",
-            225.0,
-        ),
-        (
-            "Main Course (Non-Veg)",
-            "Chicken Biryani",
-            "Full plate",
-            175.0,
-        ),
-        (
-            "Main Course (Non-Veg)",
-            "Mutton Curry / Biryani",
-            "Full plate",
-            275.0,
-        ),
-        ("Fast Food & Street", "Pav Bhaji", "2 pav + bhaji", 75.0),
-        (
-            "Fast Food & Street",
-            "Veg Burger / Sandwich",
-            "1 item",
-            60.0,
-        ),
-        ("Fast Food & Street", "Veg / Chicken Momos", "6-8 pcs", 65.0),
-        (
-            "Fast Food & Street",
-            "Veg / Egg / Chicken Roll",
-            "1 roll",
-            65.0,
-        ),
-        (
-            "Fast Food & Street",
-            "Veg Fried Rice / Noodles",
-            "Full plate",
-            100.0,
-        ),
-        ("Desserts & Beverages", "Gulab Jamun", "2 pcs", 45.0),
-        ("Desserts & Beverages", "Rasgulla", "2 pcs", 45.0),
-        (
-            "Desserts & Beverages",
-            "Cutting Chai / Special Tea",
-            "1 cup / glass",
-            15.0,
-        ),
-        (
-            "Desserts & Beverages",
-            "Filter Coffee / Cold Coffee",
-            "1 cup / glass",
-            40.0,
-        ),
-        (
-            "Desserts & Beverages",
-            "Sweet / Salted / Mango Lassi",
-            "1 glass",
-            50.0,
-        ),
-    ];
-
-    rows.iter()
-        .map(|&(category, name, unit, price)| MenuItem::new(category, name, unit, price))
-        .collect()
+    Vec::new()
 }
 
 // -- menu.csv -----------------------------------------------------------------
@@ -207,7 +56,81 @@ pub fn export_menu_csv(path: &Path, items: &[MenuItem]) -> io::Result<usize> {
     Ok(items.len())
 }
 
-// -- areas.csv ----------------------------------------------------------------
+// -- table.csv / areas.csv ---------------------------------------------------
+
+pub const TABLE_CSV_HEADER: [&str; 3] = ["Table Type", "Count", "IsAC"];
+
+/// Loads dining tables/areas from `table.csv`. Flexible with column header names
+/// ("Table Type" or "Area", "Count" or "TableCount", "IsAC" or "AC").
+pub fn load_table_csv(path: &Path) -> io::Result<Vec<Area>> {
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .from_path(path)
+        .map_err(io::Error::other)?;
+
+    let headers = rdr.headers().map_err(io::Error::other)?.clone();
+    let mut name_idx = 0;
+    let mut count_idx = 1;
+    let mut ac_idx = None;
+
+    for (i, h) in headers.iter().enumerate() {
+        let norm = h.trim().to_ascii_lowercase();
+        if norm.contains("type") || norm.contains("area") || norm.contains("section") {
+            name_idx = i;
+        } else if norm.contains("count") || norm.contains("tables") || norm.contains("qty") {
+            count_idx = i;
+        } else if norm.contains("ac") {
+            ac_idx = Some(i);
+        }
+    }
+
+    let mut areas = Vec::new();
+    for row in rdr.records() {
+        let rec = row.map_err(io::Error::other)?;
+        let name = rec.get(name_idx).unwrap_or("").trim().to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let count_str = rec.get(count_idx).unwrap_or("").trim();
+        let table_count = count_str.parse::<usize>().unwrap_or(1).max(1);
+
+        let is_ac = if let Some(idx) = ac_idx {
+            matches!(
+                rec.get(idx)
+                    .unwrap_or("")
+                    .trim()
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "yes" | "y" | "1" | "true"
+            )
+        } else {
+            name.to_ascii_lowercase().contains("ac")
+        };
+
+        areas.push(Area {
+            name,
+            is_ac,
+            table_count,
+        });
+    }
+    Ok(areas)
+}
+
+pub fn export_table_csv(path: &Path, areas: &[Area]) -> io::Result<usize> {
+    let mut wtr = csv::Writer::from_path(path).map_err(io::Error::other)?;
+    wtr.write_record(TABLE_CSV_HEADER)
+        .map_err(io::Error::other)?;
+    for a in areas {
+        wtr.write_record([
+            a.name.clone(),
+            a.table_count.to_string(),
+            if a.is_ac { "yes" } else { "no" }.to_string(),
+        ])
+        .map_err(io::Error::other)?;
+    }
+    wtr.flush()?;
+    Ok(areas.len())
+}
 
 pub fn load_areas_csv(path: &Path) -> io::Result<Vec<Area>> {
     let mut rdr = csv::ReaderBuilder::new()
@@ -310,12 +233,21 @@ pub fn load_config_csv(path: &Path) -> io::Result<HashMap<String, String>> {
 
 pub fn export_config_csv(
     path: &Path,
+    restaurant_name: &str,
+    address: &str,
+    contact: &str,
     gst_number: &str,
     ac_rate: f64,
     upi_id: &str,
 ) -> io::Result<()> {
     let mut wtr = csv::Writer::from_path(path).map_err(io::Error::other)?;
     wtr.write_record(["Key", "Value"])
+        .map_err(io::Error::other)?;
+    wtr.write_record(["RestaurantName", restaurant_name])
+        .map_err(io::Error::other)?;
+    wtr.write_record(["Address", address])
+        .map_err(io::Error::other)?;
+    wtr.write_record(["Contact", contact])
         .map_err(io::Error::other)?;
     wtr.write_record(["GSTNumber", gst_number])
         .map_err(io::Error::other)?;
@@ -333,26 +265,74 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_menu_has_valid_items() {
+    fn default_menu_is_empty() {
         let items = default_menu();
-        assert_eq!(items.len(), 35);
-        for item in &items {
-            assert!(!item.name.is_empty());
-            assert!(!item.category.is_empty());
-            assert!(item.price > 0.0);
-            assert!(item.is_available);
-        }
+        assert!(
+            items.is_empty(),
+            "default_menu should have no hardcoded items"
+        );
+    }
+
+    #[test]
+    fn table_csv_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("test_table_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("table.csv");
+
+        let input_areas = vec![
+            Area {
+                name: "Main Hall".to_string(),
+                is_ac: false,
+                table_count: 8,
+            },
+            Area {
+                name: "AC Dining".to_string(),
+                is_ac: true,
+                table_count: 6,
+            },
+        ];
+
+        export_table_csv(&path, &input_areas).unwrap();
+        let loaded = load_table_csv(&path).unwrap();
+
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].name, "Main Hall");
+        assert_eq!(loaded[0].table_count, 8);
+        assert!(!loaded[0].is_ac);
+        assert_eq!(loaded[1].name, "AC Dining");
+        assert_eq!(loaded[1].table_count, 6);
+        assert!(loaded[1].is_ac);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn config_csv_roundtrip() {
         let dir = std::env::temp_dir().join(format!("test_config_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("config.csv");
 
-        export_config_csv(&path, "27AAPFU0939F1ZV", 0.065, "krishna@upi").unwrap();
+        export_config_csv(
+            &path,
+            "SHREE KRISHNA RESTAURANT",
+            "Station Road, Near Main Market",
+            "+91 98765 43210",
+            "27AAPFU0939F1ZV",
+            0.065,
+            "krishna@upi",
+        )
+        .unwrap();
         let map = load_config_csv(&path).unwrap();
 
+        assert_eq!(
+            map.get("RestaurantName").unwrap(),
+            "SHREE KRISHNA RESTAURANT"
+        );
+        assert_eq!(
+            map.get("Address").unwrap(),
+            "Station Road, Near Main Market"
+        );
+        assert_eq!(map.get("Contact").unwrap(), "+91 98765 43210");
         assert_eq!(map.get("GSTNumber").unwrap(), "27AAPFU0939F1ZV");
         assert_eq!(map.get("AcRate").unwrap(), "6.50");
         assert_eq!(map.get("UpiId").unwrap(), "krishna@upi");

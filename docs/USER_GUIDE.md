@@ -369,20 +369,23 @@ All restaurant configuration is managed via spreadsheet-compatible CSV files:
 
 ### Export Configuration (`e`)
 1. From the **Menu** panel, press `e`.
-2. The application exports four CSV files to your working directory:
+2. The application exports five CSV files to your working directory:
    - `menu.csv`: Dish names, categories, units, prices, and stock availability (`Available`).
-   - `areas.csv`: Room names, AC status, and table counts.
+   - `table.csv` & `areas.csv`: Dining room types/sections, AC status, and table counts.
    - `offers.csv`: Promotional discount names and percentages.
-   - `config.csv`: Restaurant GSTIN, AC surcharge percentage rate, and UPI VPA ID (`UpiId`).
-3. You will receive a confirmation notification: `"Exported configuration bundle."`
+   - `config.csv`: Hotel name (`RestaurantName`), physical address (`Address`), contact phone (`Contact`), registered GSTIN (`GSTNumber`), AC surcharge rate (`AcRate`), and UPI VPA ID (`UpiId`).
+3. You will receive a confirmation notification: `"Exported config: ... items, ... table types, ... offers, settings."`
 
 ### Edit in Excel / LibreOffice
 You can open and edit any of these CSV files with Microsoft Excel, Google Sheets, or LibreOffice Calc.
+- **Empty Default Menu**: All dishes must be defined in `menu.csv`. There are no hardcoded built-in items.
+- **Table Definitions**: Modify `table.csv` to adjust dining sections and table counts.
+- **Hotel Details**: Change `RestaurantName`, `Address`, `Contact`, or `GSTNumber` in `config.csv` to reflect on printed bills and slips.
 
 ### Import Configuration (`i`)
 1. After editing and saving the CSV files, return to the **Menu** panel in DineInTakeOut.
 2. Press `i`.
-3. The application validates the data, updates the embedded database, and reconstructs the live floor plan.
+3. The application validates the data, updates the embedded database, updates hotel details, and reconstructs the live floor plan.
 
 ---
 

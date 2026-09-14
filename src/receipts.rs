@@ -10,14 +10,32 @@ pub fn money(value: f64) -> String {
     }
 }
 
-pub fn render_receipt(order: &Order, customer_mobile: Option<&str>, gst_number: &str) -> String {
+pub fn render_receipt(
+    order: &Order,
+    customer_mobile: Option<&str>,
+    gst_number: &str,
+    restaurant_name: &str,
+    address: &str,
+    contact: &str,
+) -> String {
     let mut out = String::new();
-    out.push_str(&center("SHREE KRISHNA RESTAURANT", 42));
+    let r_name = if restaurant_name.trim().is_empty() {
+        "SHREE KRISHNA RESTAURANT"
+    } else {
+        restaurant_name.trim()
+    };
+    out.push_str(&center(r_name, 42));
     out.push('\n');
-    out.push_str(&center("Dine-In & Take-Out", 42));
-    out.push('\n');
+    if !address.trim().is_empty() {
+        out.push_str(&center(address.trim(), 42));
+        out.push('\n');
+    }
+    if !contact.trim().is_empty() {
+        out.push_str(&center(&format!("Contact: {}", contact.trim()), 42));
+        out.push('\n');
+    }
     if !gst_number.trim().is_empty() {
-        out.push_str(&center(&format!("GST: {}", gst_number), 42));
+        out.push_str(&center(&format!("GST: {}", gst_number.trim()), 42));
         out.push('\n');
     }
     out.push_str(&"-".repeat(42));
@@ -94,8 +112,15 @@ pub fn render_receipt(order: &Order, customer_mobile: Option<&str>, gst_number: 
     out
 }
 
-pub fn render_kot(order: &Order, is_reprint: bool) -> String {
+pub fn render_kot(order: &Order, is_reprint: bool, restaurant_name: &str) -> String {
     let mut out = String::new();
+    let r_name = if restaurant_name.trim().is_empty() {
+        "SHREE KRISHNA RESTAURANT"
+    } else {
+        restaurant_name.trim()
+    };
+    out.push_str(&center(r_name, 42));
+    out.push('\n');
     let title = if is_reprint {
         "*** KITCHEN ORDER TICKET [REPRINT] ***"
     } else {
@@ -135,11 +160,26 @@ pub fn render_kot(order: &Order, is_reprint: bool) -> String {
 pub fn render_z_report(
     summary: &DailySalesSummary,
     restaurant_name: &str,
+    address: &str,
+    contact: &str,
     gst_number: &str,
 ) -> String {
     let mut out = String::new();
-    out.push_str(&center(restaurant_name, 42));
+    let r_name = if restaurant_name.trim().is_empty() {
+        "SHREE KRISHNA RESTAURANT"
+    } else {
+        restaurant_name.trim()
+    };
+    out.push_str(&center(r_name, 42));
     out.push('\n');
+    if !address.trim().is_empty() {
+        out.push_str(&center(address.trim(), 42));
+        out.push('\n');
+    }
+    if !contact.trim().is_empty() {
+        out.push_str(&center(&format!("Contact: {}", contact.trim()), 42));
+        out.push('\n');
+    }
     out.push_str(&center("DAILY SALES & SETTLEMENT REPORT", 42));
     out.push('\n');
     if !gst_number.trim().is_empty() {

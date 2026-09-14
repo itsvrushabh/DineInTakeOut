@@ -50,6 +50,9 @@ fn fixture() -> (App, PathBuf) {
         next_takeout_id: 1,
         physical_tables: init_physical_tables(&areas),
         areas,
+        restaurant_name: "SHREE KRISHNA RESTAURANT".into(),
+        restaurant_address: "Station Road, Near Main Market".into(),
+        restaurant_contact: "+91 98765 43210".into(),
         gst_number: "27TESTGST".into(),
         ac_rate: 0.06,
         offers: vec![Offer {
@@ -180,7 +183,17 @@ fn receipts_render_totals_and_unicode_currency() {
     let (mut app, database_path) = fixture();
     app.open_takeout_order();
     app.add_selected_to_cart();
-    let receipt = render_receipt(app.order(), Some("1234567890"), "GST-1");
+    let receipt = render_receipt(
+        app.order(),
+        Some("1234567890"),
+        "GST-1",
+        &app.restaurant_name,
+        &app.restaurant_address,
+        &app.restaurant_contact,
+    );
+    assert!(receipt.contains("SHREE KRISHNA RESTAURANT"));
+    assert!(receipt.contains("Station Road, Near Main Market"));
+    assert!(receipt.contains("Contact: +91 98765 43210"));
     assert!(receipt.contains("GST: GST-1"));
     assert!(receipt.contains("Mobile: 1234567890"));
     assert!(receipt.contains("GST (8.0%)"));
@@ -468,17 +481,27 @@ fn pos_features_kot_and_item_notes() {
     // Generate KOT
     app.generate_kot();
     assert_eq!(app.order().kot_sent_count, 1);
-    let kot_text = dinein_takeout_billing::receipts::render_kot(app.order(), false);
+    let kot_text =
+        dinein_takeout_billing::receipts::render_kot(app.order(), false, &app.restaurant_name);
+    assert!(kot_text.contains("SHREE KRISHNA RESTAURANT"));
     assert!(kot_text.contains("KITCHEN ORDER TICKET"));
     assert!(kot_text.contains("↳ Less spicy, extra crisp"));
     assert!(!kot_text.contains("REPRINT"));
 
     // Second KOT should mark as REPRINT
-    let kot_reprint = dinein_takeout_billing::receipts::render_kot(app.order(), true);
+    let kot_reprint =
+        dinein_takeout_billing::receipts::render_kot(app.order(), true, &app.restaurant_name);
     assert!(kot_reprint.contains("[REPRINT]"));
 
     // Receipt should also contain note
-    let receipt = render_receipt(app.order(), None, &app.gst_number);
+    let receipt = render_receipt(
+        app.order(),
+        None,
+        &app.gst_number,
+        &app.restaurant_name,
+        &app.restaurant_address,
+        &app.restaurant_contact,
+    );
     assert!(receipt.contains("↳ Less spicy, extra crisp"));
 
     let _ = fs::remove_file(database_path);
@@ -646,4 +669,102 @@ fn pos_features_daily_backup_creation() {
 
     let _ = fs::remove_file(db_path);
     let _ = fs::remove_file(backup_file);
+}
+
+#[test]
+fn csv_sources_and_hotel_bill_details() {
+    use dinein_takeout_billing::config::{
+        default_menu, export_config_csv, export_table_csv, load_config_csv, load_table_csv,
+    };
+
+    // 1. default_menu must be completely empty
+    let empty_menu = default_menu();
+    assert!(empty_menu.is_empty(), "default_menu should have no items");
+
+    // 2. table.csv roundtrip and table type & counts
+    let table_path = test_path("test_table.csv");
+    let test_areas = vec![
+        Area {
+            name: "Main Hall".into(),
+            is_ac: false,
+            table_count: 8,
+        },
+        Area {
+            name: "AC Dining".into(),
+            is_ac: true,
+            table_count: 6,
+        },
+        Area {
+            name: "Family Section".into(),
+            is_ac: true,
+            table_count: 4,
+        },
+        Area {
+            name: "Garden".into(),
+            is_ac: false,
+            table_count: 6,
+        },
+    ];
+    let written = export_table_csv(&table_path, &test_areas).unwrap();
+    assert_eq!(written, 4);
+    let loaded_areas = load_table_csv(&table_path).unwrap();
+    assert_eq!(loaded_areas.len(), 4);
+    assert_eq!(loaded_areas[0].name, "Main Hall");
+    assert_eq!(loaded_areas[0].table_count, 8);
+    assert!(!loaded_areas[0].is_ac);
+    assert_eq!(loaded_areas[1].name, "AC Dining");
+    assert_eq!(loaded_areas[1].table_count, 6);
+    assert!(loaded_areas[1].is_ac);
+    assert_eq!(loaded_areas[2].name, "Family Section");
+    assert_eq!(loaded_areas[2].table_count, 4);
+    assert!(loaded_areas[2].is_ac);
+    assert_eq!(loaded_areas[3].name, "Garden");
+    assert_eq!(loaded_areas[3].table_count, 6);
+    assert!(!loaded_areas[3].is_ac);
+    let _ = fs::remove_file(&table_path);
+
+    // 3. config.csv with hotel name, address, contact, GST
+    let config_path = test_path("test_config.csv");
+    export_config_csv(
+        &config_path,
+        "SHREE KRISHNA RESTAURANT",
+        "Station Road, Near Main Market",
+        "+91 98765 43210",
+        "27AAPFU0939F1ZV",
+        0.06,
+        "shreekrishna@upi",
+    )
+    .unwrap();
+    let cfg = load_config_csv(&config_path).unwrap();
+    assert_eq!(
+        cfg.get("RestaurantName").unwrap(),
+        "SHREE KRISHNA RESTAURANT"
+    );
+    assert_eq!(
+        cfg.get("Address").unwrap(),
+        "Station Road, Near Main Market"
+    );
+    assert_eq!(cfg.get("Contact").unwrap(), "+91 98765 43210");
+    assert_eq!(cfg.get("GSTNumber").unwrap(), "27AAPFU0939F1ZV");
+    let _ = fs::remove_file(&config_path);
+
+    // 4. Verify receipt printing contains all hotel details
+    let (mut app, database_path) = fixture();
+    app.open_takeout_order();
+    app.add_selected_to_cart();
+    let receipt = render_receipt(
+        app.order(),
+        Some("9998887776"),
+        &app.gst_number,
+        &app.restaurant_name,
+        &app.restaurant_address,
+        &app.restaurant_contact,
+    );
+    assert!(receipt.contains("SHREE KRISHNA RESTAURANT"));
+    assert!(receipt.contains("Station Road, Near Main Market"));
+    assert!(receipt.contains("Contact: +91 98765 43210"));
+    assert!(receipt.contains("GST: 27TESTGST"));
+    assert!(receipt.contains("Mobile: 9998887776"));
+
+    let _ = fs::remove_file(database_path);
 }

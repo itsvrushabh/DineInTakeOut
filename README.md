@@ -3,7 +3,7 @@
 [![Rust](https://img.shields.io/badge/Rust-2021_Edition-orange?logo=rust)](https://www.rust-lang.org/)
 [![TUI](https://img.shields.io/badge/TUI-Ratatui_0.28-blue)](https://github.com/ratatui-org/ratatui)
 [![Database](https://img.shields.io/badge/Database-Turso_SQLite-teal)](https://turso.tech/)
-[![Tests](https://img.shields.io/badge/Tests-17_Unit_%7C_16_Integration_Passing-brightgreen)](tests/integration_smoke.rs)
+[![Tests](https://img.shields.io/badge/Tests-18_Unit_%7C_17_Integration_Passing-brightgreen)](tests/integration_smoke.rs)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 A high-performance, keyboard-driven Terminal User Interface (TUI) billing, table management, and point-of-sale system engineered for dine-in restaurants and take-out counters.
@@ -63,7 +63,7 @@ Built in pure Rust using **Ratatui** and powered by an embedded **Turso SQLite e
   - `4`: **Person Credit** (Customer ledger)
   - `5`: **Have it on Hotel** (Complimentary / House tab)
 - **Embedded Turso SQLite & Automatic Daily Backups**: Orders, table statuses, cart items, customer mobile numbers, and paid bills persist automatically to `data/billing.db`. Daily snapshots are safely preserved in `data/backups/billing_YYYY-MM-DD.db`.
-- **Spreadsheet-Friendly Configuration**: Export (`e`) and import (`i`) complete restaurant setups (`menu.csv`, `areas.csv`, `offers.csv`, `config.csv`) using Excel, LibreOffice, or Google Sheets.
+- **Spreadsheet-Friendly Configuration & Hotel Details**: Sourced directly from CSV files (`menu.csv`, `table.csv` / `areas.csv`, `offers.csv`, `config.csv`). Receipts prominently feature hotel name ("SHREE KRISHNA RESTAURANT"), address, phone contact, and GSTIN. Export (`e`) and import (`i`) complete restaurant setups.
 
 ---
 
@@ -155,8 +155,8 @@ cargo clippy --all-targets -- -D warnings
 ```
 
 ### Test Coverage Highlights
-- **17 Unit Tests**: Domain financial math, AC surcharges, GST rules, cart operations, CSV serialization/deserialization, isolated database round-trips, and daily sales aggregation queries.
-- **16 Integration Tests**: Full terminal UI simulations using Ratatui's headless `TestBackend`, validating table jump search, mobile entry, offer selection, payment type switching (UPI/Cash/Card), receipt updates, KOT generation, item notes, "86" stock toggle, table moves/merges, dynamic UPI QR rendering, Z-reports, bill search, and automated daily backups.
+- **18 Unit Tests**: Domain financial math, AC surcharges, GST rules, cart operations, table CSV & config CSV round-trips, empty fallback menu verification, isolated database round-trips, and daily sales aggregation queries.
+- **17 Integration Tests**: Full terminal UI simulations using Ratatui's headless `TestBackend`, validating table jump search, mobile entry, offer selection, payment type switching (UPI/Cash/Card), receipt updates, hotel receipt header details, KOT generation, item notes, "86" stock toggle, table moves/merges, dynamic UPI QR rendering, Z-reports, bill search, and automated daily backups.
 
 To run code coverage with LLVM tools:
 ```bash

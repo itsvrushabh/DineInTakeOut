@@ -9,7 +9,8 @@ use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 use crate::{
     config::{
         default_menu, export_areas_csv, export_config_csv, export_menu_csv, export_offers_csv,
-        load_areas_csv, load_config_csv, load_menu, load_offers_csv,
+        export_table_csv, load_areas_csv, load_config_csv, load_menu, load_offers_csv,
+        load_table_csv,
     },
     db::Database,
     models::{
@@ -29,6 +30,9 @@ pub struct App {
     pub next_takeout_id: u32,
     pub physical_tables: Vec<PhysicalTable>, // all physical tables by area
     pub areas: Vec<Area>,                    // configurable dining areas (CSV-managed)
+    pub restaurant_name: String,             // hotel / restaurant name printed on bills
+    pub restaurant_address: String,          // restaurant address printed on bills
+    pub restaurant_contact: String,          // contact phone/mobile printed on bills
     pub gst_number: String,                  // registered GSTIN printed on receipts
     pub ac_rate: f64,                        // AC surcharge rate (fraction) for AC areas
     pub offers: Vec<Offer>,                  // discount offers selectable at billing
@@ -131,32 +135,161 @@ impl App {
             },
         };
 
-        // Restore config, unpaid orders and physical table states from the last run.
-        let now = Local::now();
-        let (areas, gst_number, ac_rate, offers, upi_id) = match &database {
-            Some(db) => {
-                let db_upi = db.get_setting("upi_id");
-                let upi = if db_upi.is_empty() {
-                    "restaurant@upi".to_string()
-                } else {
-                    db_upi
-                };
-                (
-                    db.load_areas(),
-                    db.get_setting("gst_number"),
-                    db.get_setting("ac_rate").parse().unwrap_or(0.06),
-                    db.load_offers(),
-                    upi,
-                )
+        // Load config from config.csv (if present)
+        let config_csv = load_config_csv(Path::new("config.csv")).unwrap_or_default();
+        let get_cfg = |keys: &[&str]| -> Option<String> {
+            for k in keys {
+                if let Some(v) = config_csv.get(*k) {
+                    if !v.trim().is_empty() {
+                        return Some(v.trim().to_string());
+                    }
+                }
+                for (mk, mv) in &config_csv {
+                    if mk.eq_ignore_ascii_case(k) && !mv.trim().is_empty() {
+                        return Some(mv.trim().to_string());
+                    }
+                }
             }
-            None => (
-                Area::defaults(),
-                String::new(),
-                0.06,
-                Vec::new(),
-                "restaurant@upi".to_string(),
-            ),
+            None
         };
+
+        // Dining areas: database → table.csv → areas.csv → defaults
+        let areas = match &database {
+            Some(db) => {
+                let db_areas = db.load_areas();
+                if db_areas.is_empty() {
+                    let loaded = load_table_csv(Path::new("table.csv"))
+                        .or_else(|_| load_areas_csv(Path::new("areas.csv")))
+                        .unwrap_or_else(|_| Area::defaults());
+                    let _ = db.replace_areas(&loaded);
+                    loaded
+                } else {
+                    db_areas
+                }
+            }
+            None => load_table_csv(Path::new("table.csv"))
+                .or_else(|_| load_areas_csv(Path::new("areas.csv")))
+                .unwrap_or_else(|_| Area::defaults()),
+        };
+
+        // Hotel & billing configuration
+        let (
+            restaurant_name,
+            restaurant_address,
+            restaurant_contact,
+            gst_number,
+            ac_rate,
+            offers,
+            upi_id,
+        ) = match &database {
+            Some(db) => {
+                let db_name = db.get_setting("restaurant_name");
+                let name = if !db_name.trim().is_empty() {
+                    db_name
+                } else {
+                    get_cfg(&[
+                        "RestaurantName",
+                        "restaurant_name",
+                        "HotelName",
+                        "hotel_name",
+                    ])
+                    .unwrap_or_else(|| "SHREE KRISHNA RESTAURANT".to_string())
+                };
+
+                let db_addr = db.get_setting("restaurant_address");
+                let address = if !db_addr.trim().is_empty() {
+                    db_addr
+                } else {
+                    get_cfg(&["Address", "address", "HotelAddress", "restaurant_address"])
+                        .unwrap_or_else(|| "Station Road, Near Main Market".to_string())
+                };
+
+                let db_contact = db.get_setting("restaurant_contact");
+                let contact = if !db_contact.trim().is_empty() {
+                    db_contact
+                } else {
+                    get_cfg(&["Contact", "contact", "Phone", "phone", "restaurant_contact"])
+                        .unwrap_or_else(|| "+91 98765 43210".to_string())
+                };
+
+                let db_gst = db.get_setting("gst_number");
+                let gst = if !db_gst.trim().is_empty() {
+                    db_gst
+                } else {
+                    get_cfg(&["GSTNumber", "gst_number", "GST", "GSTIN"])
+                        .unwrap_or_else(|| "27AAPFU0939F1ZV".to_string())
+                };
+
+                let db_ac = db.get_setting("ac_rate");
+                let ac = if let Ok(rate) = db_ac.parse::<f64>() {
+                    if rate > 1.0 {
+                        rate / 100.0
+                    } else {
+                        rate
+                    }
+                } else if let Some(rate_str) = get_cfg(&["AcRate", "ac_rate", "ACRate"]) {
+                    let r = rate_str.parse::<f64>().unwrap_or(6.0);
+                    if r > 1.0 {
+                        r / 100.0
+                    } else {
+                        r
+                    }
+                } else {
+                    0.06
+                };
+
+                let db_upi = db.get_setting("upi_id");
+                let upi = if !db_upi.trim().is_empty() {
+                    db_upi
+                } else {
+                    get_cfg(&["UpiId", "upi_id", "UPI", "UPIID"])
+                        .unwrap_or_else(|| "shreekrishna@upi".to_string())
+                };
+
+                let _ = db.set_setting("restaurant_name", &name);
+                let _ = db.set_setting("restaurant_address", &address);
+                let _ = db.set_setting("restaurant_contact", &contact);
+                let _ = db.set_setting("gst_number", &gst);
+                let _ = db.set_setting("ac_rate", &format!("{:.4}", ac));
+                let _ = db.set_setting("upi_id", &upi);
+
+                (name, address, contact, gst, ac, db.load_offers(), upi)
+            }
+            None => {
+                let name = get_cfg(&[
+                    "RestaurantName",
+                    "restaurant_name",
+                    "HotelName",
+                    "hotel_name",
+                ])
+                .unwrap_or_else(|| "SHREE KRISHNA RESTAURANT".to_string());
+                let address =
+                    get_cfg(&["Address", "address", "HotelAddress", "restaurant_address"])
+                        .unwrap_or_else(|| "Station Road, Near Main Market".to_string());
+                let contact =
+                    get_cfg(&["Contact", "contact", "Phone", "phone", "restaurant_contact"])
+                        .unwrap_or_else(|| "+91 98765 43210".to_string());
+                let gst = get_cfg(&["GSTNumber", "gst_number", "GST", "GSTIN"])
+                    .unwrap_or_else(|| "27AAPFU0939F1ZV".to_string());
+                let ac = if let Some(rate_str) = get_cfg(&["AcRate", "ac_rate", "ACRate"]) {
+                    let r = rate_str.parse::<f64>().unwrap_or(6.0);
+                    if r > 1.0 {
+                        r / 100.0
+                    } else {
+                        r
+                    }
+                } else {
+                    0.06
+                };
+                let upi = get_cfg(&["UpiId", "upi_id", "UPI", "UPIID"])
+                    .unwrap_or_else(|| "shreekrishna@upi".to_string());
+
+                (name, address, contact, gst, ac, Vec::new(), upi)
+            }
+        };
+
+        // Restore unpaid orders and physical table states from the last run.
+        let now = Local::now();
 
         let (orders, next_order_id, physical_tables) = match &database {
             Some(db) => {
@@ -214,6 +347,9 @@ impl App {
             next_takeout_id,
             physical_tables,
             areas,
+            restaurant_name,
+            restaurant_address,
+            restaurant_contact,
             gst_number,
             ac_rate,
             offers,
@@ -667,8 +803,18 @@ impl App {
         }
 
         let gst_number = self.gst_number.clone();
+        let restaurant_name = self.restaurant_name.clone();
+        let restaurant_address = self.restaurant_address.clone();
+        let restaurant_contact = self.restaurant_contact.clone();
         let order = self.order();
-        let updated_receipt = render_receipt(order, order.customer_mobile.as_deref(), &gst_number);
+        let updated_receipt = render_receipt(
+            order,
+            order.customer_mobile.as_deref(),
+            &gst_number,
+            &restaurant_name,
+            &restaurant_address,
+            &restaurant_contact,
+        );
 
         if let Some(summary) = self.recent_bills.iter_mut().find(|b| b.id == order_id) {
             summary.payment_mode = Some(mode);
@@ -878,7 +1024,7 @@ impl App {
             return;
         }
         let is_reprint = order.kot_sent_count > 0;
-        let kot_text = crate::receipts::render_kot(order, is_reprint);
+        let kot_text = crate::receipts::render_kot(order, is_reprint, &self.restaurant_name);
         let path = match crate::receipts::save_kot_to_disk(&kot_text, &order.label, order.id) {
             Ok(p) => format!("Saved: {}", p.display()),
             Err(e) => format!("Save error: {e}"),
@@ -908,7 +1054,9 @@ impl App {
         if let Some(summary) = &self.daily_report_summary {
             let text = crate::receipts::render_z_report(
                 summary,
-                "DineIn TakeOut Restaurant",
+                &self.restaurant_name,
+                &self.restaurant_address,
+                &self.restaurant_contact,
                 &self.gst_number,
             );
             let path = match crate::receipts::save_z_report_to_disk(&text, &summary.date) {
@@ -946,8 +1094,14 @@ impl App {
             let bill_id = bill.id;
             if let Some(db) = &self.database {
                 if let Some(ord) = db.load_historical_order(bill_id) {
-                    let receipt =
-                        render_receipt(&ord, ord.customer_mobile.as_deref(), &self.gst_number);
+                    let receipt = render_receipt(
+                        &ord,
+                        ord.customer_mobile.as_deref(),
+                        &self.gst_number,
+                        &self.restaurant_name,
+                        &self.restaurant_address,
+                        &self.restaurant_contact,
+                    );
                     let _ = crate::receipts::print_receipt_text(&receipt);
                     self.notify(format!("Reprinted Bill #{bill_id}!"));
                     return;
@@ -1258,6 +1412,9 @@ impl App {
         };
         self.order_mut().customer_mobile = customer_mobile.map(String::from);
         let gst_number = self.gst_number.clone();
+        let restaurant_name = self.restaurant_name.clone();
+        let restaurant_address = self.restaurant_address.clone();
+        let restaurant_contact = self.restaurant_contact.clone();
         let (order_id, order_label, order_service, table_info, totals, bill_text) = {
             let order = self.order();
             let table_info = match (order.table_number, order.area.clone()) {
@@ -1270,7 +1427,14 @@ impl App {
                 order.service,
                 table_info,
                 order.totals(),
-                render_receipt(order, customer_mobile, &gst_number),
+                render_receipt(
+                    order,
+                    customer_mobile,
+                    &gst_number,
+                    &restaurant_name,
+                    &restaurant_address,
+                    &restaurant_contact,
+                ),
             )
         };
 
@@ -1765,8 +1929,14 @@ impl App {
             let bill_id = bill.id;
             if let Some(db) = &self.database {
                 if let Some(ord) = db.load_historical_order(bill_id) {
-                    let receipt =
-                        render_receipt(&ord, ord.customer_mobile.as_deref(), &self.gst_number);
+                    let receipt = render_receipt(
+                        &ord,
+                        ord.customer_mobile.as_deref(),
+                        &self.gst_number,
+                        &self.restaurant_name,
+                        &self.restaurant_address,
+                        &self.restaurant_contact,
+                    );
                     let _ = crate::receipts::print_receipt_text(&receipt);
                     self.notify(format!("Reprinted Bill #{bill_id}!"));
                     return;
@@ -1810,19 +1980,29 @@ impl App {
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
         let menu_p = base.join("menu.csv");
+        let table_p = base.join("table.csv");
         let areas_p = base.join("areas.csv");
         let offers_p = base.join("offers.csv");
         let config_p = base.join("config.csv");
 
         let menu_n = export_menu_csv(&menu_p, &self.items).map_err(|e| e.to_string());
-        let areas_n = export_areas_csv(&areas_p, &self.areas).map_err(|e| e.to_string());
+        let table_n = export_table_csv(&table_p, &self.areas).map_err(|e| e.to_string());
+        let _ = export_areas_csv(&areas_p, &self.areas);
         let offers_n = export_offers_csv(&offers_p, &self.offers).map_err(|e| e.to_string());
-        let config_ok = export_config_csv(&config_p, &self.gst_number, self.ac_rate, &self.upi_id)
-            .map_err(|e| e.to_string());
+        let config_ok = export_config_csv(
+            &config_p,
+            &self.restaurant_name,
+            &self.restaurant_address,
+            &self.restaurant_contact,
+            &self.gst_number,
+            self.ac_rate,
+            &self.upi_id,
+        )
+        .map_err(|e| e.to_string());
 
-        match (menu_n, areas_n, offers_n, config_ok) {
-            (Ok(mn), Ok(an), Ok(on), Ok(())) => self.notify(format!(
-                "Exported config: {mn} items, {an} areas, {on} offers, settings."
+        match (menu_n, table_n, offers_n, config_ok) {
+            (Ok(mn), Ok(tn), Ok(on), Ok(())) => self.notify(format!(
+                "Exported config: {mn} items, {tn} table types, {on} offers, settings."
             )),
             _ => self.notify("Config export failed.".to_string()),
         }
@@ -1835,6 +2015,7 @@ impl App {
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
         let menu_p = base.join("menu.csv");
+        let table_p = base.join("table.csv");
         let areas_p = base.join("areas.csv");
         let offers_p = base.join("offers.csv");
         let config_p = base.join("config.csv");
@@ -1851,14 +2032,14 @@ impl App {
             }
         };
 
-        let areas = match load_areas_csv(&areas_p) {
+        let areas = match load_table_csv(&table_p).or_else(|_| load_areas_csv(&areas_p)) {
             Ok(v) if !v.is_empty() => v,
             Ok(_) => {
-                self.notify("Import skipped: areas.csv empty.".to_string());
+                self.notify("Import skipped: table.csv / areas.csv empty.".to_string());
                 return;
             }
             Err(e) => {
-                self.notify(format!("Areas import failed: {e}"));
+                self.notify(format!("Tables import failed: {e}"));
                 return;
             }
         };
@@ -1871,24 +2052,51 @@ impl App {
             }
         };
 
-        let (gst, ac_rate, upi_id) = match load_config_csv(&config_p) {
-            Ok(map) => (
-                map.get("GSTNumber")
-                    .cloned()
-                    .unwrap_or_else(|| self.gst_number.clone()),
-                map.get("AcRate")
-                    .and_then(|s| s.trim().parse::<f64>().ok())
-                    .map(|p| (p / 100.0).clamp(0.0, 1.0))
-                    .unwrap_or(self.ac_rate),
-                map.get("UpiId")
-                    .cloned()
-                    .unwrap_or_else(|| self.upi_id.clone()),
-            ),
-            Err(e) => {
-                self.notify(format!("Config import failed: {e}"));
-                return;
-            }
-        };
+        let (restaurant_name, address, contact, gst, ac_rate, upi_id) =
+            match load_config_csv(&config_p) {
+                Ok(map) => (
+                    map.get("RestaurantName")
+                        .or_else(|| map.get("restaurant_name"))
+                        .or_else(|| map.get("HotelName"))
+                        .cloned()
+                        .unwrap_or_else(|| self.restaurant_name.clone()),
+                    map.get("Address")
+                        .or_else(|| map.get("address"))
+                        .or_else(|| map.get("restaurant_address"))
+                        .cloned()
+                        .unwrap_or_else(|| self.restaurant_address.clone()),
+                    map.get("Contact")
+                        .or_else(|| map.get("contact"))
+                        .or_else(|| map.get("Phone"))
+                        .or_else(|| map.get("restaurant_contact"))
+                        .cloned()
+                        .unwrap_or_else(|| self.restaurant_contact.clone()),
+                    map.get("GSTNumber")
+                        .or_else(|| map.get("gst_number"))
+                        .or_else(|| map.get("GST"))
+                        .cloned()
+                        .unwrap_or_else(|| self.gst_number.clone()),
+                    map.get("AcRate")
+                        .or_else(|| map.get("ac_rate"))
+                        .and_then(|s| s.trim().parse::<f64>().ok())
+                        .map(|p| {
+                            if p > 1.0 {
+                                (p / 100.0).clamp(0.0, 1.0)
+                            } else {
+                                p.clamp(0.0, 1.0)
+                            }
+                        })
+                        .unwrap_or(self.ac_rate),
+                    map.get("UpiId")
+                        .or_else(|| map.get("upi_id"))
+                        .cloned()
+                        .unwrap_or_else(|| self.upi_id.clone()),
+                ),
+                Err(e) => {
+                    self.notify(format!("Config import failed: {e}"));
+                    return;
+                }
+            };
 
         if let Some(db) = &self.database {
             if let Err(e) = db.replace_menu(&items) {
@@ -1903,6 +2111,9 @@ impl App {
                 self.notify(format!("DB offers sync failed: {e}"));
                 return;
             }
+            let _ = db.set_setting("restaurant_name", &restaurant_name);
+            let _ = db.set_setting("restaurant_address", &address);
+            let _ = db.set_setting("restaurant_contact", &contact);
             if let Err(e) = db.set_setting("gst_number", &gst) {
                 self.notify(format!("DB gst sync failed: {e}"));
                 return;
@@ -1919,6 +2130,9 @@ impl App {
 
         self.items = items;
         self.areas = areas;
+        self.restaurant_name = restaurant_name;
+        self.restaurant_address = address;
+        self.restaurant_contact = contact;
         self.offers = if let Some(db) = &self.database {
             db.load_offers()
         } else {

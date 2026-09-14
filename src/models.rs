@@ -227,28 +227,27 @@ pub struct Area {
 
 impl Area {
     /// Seed layout: preserves the names the pre-dynamic database used so that
-    /// existing stored orders still resolve to a known area.
     pub fn defaults() -> Vec<Area> {
         vec![
             Area {
-                name: "Front Garden".to_string(),
+                name: "Main Hall".to_string(),
                 is_ac: false,
-                table_count: 5,
+                table_count: 8,
             },
             Area {
-                name: "AC Rooms".to_string(),
+                name: "AC Dining".to_string(),
+                is_ac: true,
+                table_count: 6,
+            },
+            Area {
+                name: "Family Section".to_string(),
                 is_ac: true,
                 table_count: 4,
             },
             Area {
-                name: "Main Hall".to_string(),
+                name: "Garden".to_string(),
                 is_ac: false,
                 table_count: 6,
-            },
-            Area {
-                name: "Back Garden".to_string(),
-                is_ac: false,
-                table_count: 8,
             },
         ]
     }
@@ -499,19 +498,19 @@ mod tests {
     #[test]
     fn default_areas_keep_expected_capacity() {
         let total: usize = Area::defaults().iter().map(|a| a.table_count).sum();
-        assert_eq!(total, 23);
+        assert_eq!(total, 24);
         let ac = Area::defaults()
             .into_iter()
-            .find(|a| a.name == "AC Rooms")
+            .find(|a| a.name == "AC Dining")
             .unwrap();
-        assert_eq!(ac.table_count, 4);
+        assert_eq!(ac.table_count, 6);
         assert!(ac.is_ac);
     }
 
     #[test]
     fn ac_rooms_add_surcharge_and_gst() {
         // ₹200 food in an AC area: 6% AC charge + 5% GST on (200 + 12).
-        let totals = order(Service::DineIn, Some("AC Rooms"), true, 0.06).totals();
+        let totals = order(Service::DineIn, Some("AC Dining"), true, 0.06).totals();
         assert_eq!(totals.subtotal, 200.0);
         assert!((totals.ac_charge - 12.0).abs() < 1e-9);
         assert!((totals.gst - 10.6).abs() < 1e-9);
