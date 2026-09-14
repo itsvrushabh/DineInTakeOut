@@ -37,7 +37,7 @@ bills/z_report_*.txt <── daily sales summary  ──┘
   - `ui/menu.rs`: Menu table with category, unit, price columns, and `[86 OUT]` badges.
   - `ui/bill.rs`: Cart lines table with item cooking notes (`↳ <note>`), paid title banner, and totals breakdown.
   - `ui/notifications.rs`: Status banner (adapts to compact and standard terminal sizes).
-  - `ui/recent_bills.rs`: Recent bill history panel with payment mode tags.
+  - `ui/recent_bills.rs`: Dual-box horizontal panel showing Recent Bills and KOT Bills with tab navigation (`←`/`→`).
   - `ui/modals.rs`: Customer mobile capture, payment mode confirmation, discount offer selection, daily sales summary (Z-report), historical bill search, dynamic UPI QR display, table move/merge selector, item note buffer, and help overlay.
   - `ui/footer.rs`: Contextual keyboard shortcut reference.
 - **`src/main.rs`**: Minimal entry point: terminal initialization/restoration, raw mode setup, and event polling loop.
@@ -48,7 +48,7 @@ bills/z_report_*.txt <── daily sales summary  ──┘
 
 1. **Table Initiation**: Open a table order (`Enter`) or take-out order (`t`). Dine-in tables enter *Taking order*.
 2. **Ordering & Notes**: Add menu items (out-of-stock items toggled with `o` are blocked). Highlight cart items and press `n` to attach custom cooking notes. Use `s` to advance through *Serving* and *Ready for bill*.
-3. **Kitchen Dispatch (`k`)**: Press `k` to dispatch a Kitchen Order Ticket (KOT) to `bills/` and the kitchen printer. Subsequent prints are marked `[REPRINT]`.
+3. **Kitchen Dispatch (`k`)**: Press `k` to dispatch a Kitchen Order Ticket (KOT) directly to the SQLite database and the kitchen printer. Subsequent prints are marked `[REPRINT]`. No disk text files are written.
 4. **Table Move & Merge (`m`)**: Move active checks to any free table (recalculating taxes and AC surcharges) or merge into an already seated table.
 5. **Table Jump (`g`)**: Instantly search across all tables in all areas by number, name, or status, jumping focus directly to the target order.
 6. **Billing (`p` / `b`)**:
@@ -65,7 +65,7 @@ bills/z_report_*.txt <── daily sales summary  ──┘
    - Confirms final payment mode, archives order, and transitions table to *Cleaning*.
    - A 10-minute auto-ready countdown begins, turning *Ready* automatically, or immediately with `r`.
 9. **Reporting & Historical Lookup**:
-   - Press `z` anytime to review end-of-day metrics and export the Daily Sales Report (Z-Report) via `p`.
+   - Press `z` anytime to review end-of-day metrics and save the Daily Sales Report (Z-Report) to the database via `p`.
    - In Recent Bills, press `/` or `s` to search historical receipts by Bill ID or mobile number and reprint immediately.
 
 ---

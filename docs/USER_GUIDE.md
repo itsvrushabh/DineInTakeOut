@@ -66,11 +66,11 @@ The screen is divided into clear functional panels designed to minimize clutter 
 │                                  │ TOTAL                                ₹462.00           │
 │                                  │ Payment Type                            UPI            │
 ├──────────────────────────────────┴────────────────────────────────────────────────────────┤
-│ Recent Bills (latest 5):                                                                  │
-│ Bill #4   Main-T4    Dine-In    [UPI]            ₹462.00                                  │
-│ Bill #3   TK1        Take-Out   [CASH]           ₹250.00                                  │
-├───────────────────────────────────────────────────────────────────────────────────────────┤
-│ Notification: Generated KOT for Main-T4. Printed to bills/kot_Order_#4_...txt             │
+│ Recent Bills [Active] (←/→ switch)        │ KOT Bills (latest 10)                         │
+│ Bill #4   Main-T4    Dine-In  [UPI]  ₹462 │ KOT #2  Main-T4 (3 items)  14:32              │
+│ Bill #3   TK1        Take-Out [CASH] ₹250 │ KOT #1  AC-101  (2 items)  14:15              │
+├───────────────────────────────────────────┴───────────────────────────────────────────────┤
+│ Notification: Generated KOT for Main-T4. Saved to database (ID #2)                        │
 ├───────────────────────────────────────────────────────────────────────────────────────────┤
 │ Tab: Next panel · ↑↓: Select · Enter: Add/Open · p: Bill · k: KOT · z: Z-Report · ?: Help │
 └───────────────────────────────────────────────────────────────────────────────────────────┘
@@ -82,7 +82,7 @@ The screen is divided into clear functional panels designed to minimize clutter 
 3. **Menu Search (Middle)**: Real-time fuzzy item search with instant filtering.
 4. **Menu Catalogue (Body Left)**: Categorized item listings with prices and portion units.
 5. **Bill & Cart View (Body Right)**: Active order line items, quantity, item prices, subtotal, discount, AC surcharge, GST breakdown, final total, and payment type badge.
-6. **Recent Bills (Lower Body)**: Quick-reference log of the last 5 settled bills with payment mode tags.
+6. **Recent Bills & KOTs (Lower Body)**: Dual side-by-side boxes showing recent settled bills (left) and latest kitchen order tickets (right). Use `←`/`→` to toggle focus between boxes.
 7. **Notification Banner (Bottom)**: Operational feedback, validation warnings, and confirmation messages.
 8. **Footer (Bottom Edge)**: Contextual hotkey reminders.
 
@@ -191,11 +191,12 @@ DineInTakeOut provides full back-of-house kitchen coordination:
    - Includes Table / Take-out label, Area name, Order ID, and current timestamp.
    - Lists each dish and quantity ordered alongside attached cooking notes (`↳ Note: ...`).
    - Omits prices and taxes so kitchen staff can focus purely on order preparation.
-3. The ticket is saved to `bills/kot_Order_#<id>_<timestamp>.txt`.
+3. The ticket is saved directly to the database (`kots` table) and immediately appears in the **KOT Bills** box in the bottom panel. No text files are written to disk, keeping the system clean.
 4. If a CUPS thermal printer is configured, the ticket is instantly printed to the kitchen printer.
 5. **Duplicate / Reprint Protection**:
    - The first KOT printed displays `*** KITCHEN ORDER TICKET (KOT) ***`.
    - Any subsequent print for the same order automatically displays `*** KITCHEN ORDER TICKET [REPRINT] ***` to prevent chefs from accidentally double-preparing dishes.
+6. **Reprint from Recent Panel**: You can highlight any past KOT in the **KOT Bills** box and press `p`, `r`, or `Enter` to reprint it at any time.
 
 ---
 
@@ -318,9 +319,9 @@ At shift change or end-of-day closing:
      - Card collections
      - Person credit entries
      - House complimentary orders
-3. **Print & Export (`p`)**:
-   - Press `p` while viewing the Z-report to print a clean 42-column register tape slip.
-   - A copy is automatically archived to `bills/z_report_YYYY-MM-DD.txt`.
+3. **Print & Save to DB (`p`)**:
+   - Press `p` while viewing the Z-report to print a clean 42-column register tape slip via CUPS (`lp`).
+   - The summary and breakdown are saved directly into the SQLite database (`z_reports` table). No text files are written to disk.
 4. Press `Esc` to close the report.
 
 ---
@@ -340,17 +341,26 @@ When guests leave the table:
 
 ---
 
-## 17. Reviewing Recent Bills & Historical Search (`/` or `s`)
+## 17. Reviewing Recent Bills & KOTs (Dual-Box Layout) & Historical Search (`/` or `s`)
 
-### Recent Bills Panel
-1. Navigate to the **Recent bills** panel (press `Tab` from the Tables panel).
-2. The panel lists the latest 5 completed bills with their Bill ID, Table Label, Service type, Payment Mode (`[UPI]`, `[CASH]`, `[CARD]`), and Total Amount.
-3. Use `↑` / `↓` to scroll through recent bills.
-4. The right-hand panel renders a **read-only view of the exact receipt** that was generated for that bill.
+### Dual-Box Bottom Panel
+Navigate to the bottom panel by pressing `Tab` from the Tables or Cart panel. The bottom area is split horizontally into two side-by-side boxes:
+
+1. **Box 1 (Left): Recent Bills**
+   - Displays the latest settled bills with Bill ID, Table Label, Service type, Payment Mode (`[UPI]`, `[CASH]`, `[CARD]`), and Total Amount.
+   - When active, the right-hand panel renders `" Previous bill — read only "` showing the exact formatted receipt breakdown.
+2. **Box 2 (Right): KOT Bills**
+   - Displays the latest 10 Kitchen Order Tickets with KOT ID, Table/Take-out Label, item count, timestamp, and reprint flag.
+   - When active, the right-hand panel renders `" KOT Ticket — read only "` displaying the full 42-column KOT ticket with special cooking instructions.
+
+### Switching Between Boxes & Reprints
+- **Switch Active Box**: Press `←` / `→` (or `h` / `l`). The active box header shows `[Active]` with a distinct cyan border.
+- **Select Order / Ticket**: Use `↑` / `↓` (or `j` / `k`) to move the selection highlight within the active box.
+- **Reprint Bill or KOT**: Press `p`, `r`, or `Enter` on the selected item to reprint the bill or KOT ticket directly to the thermal printer.
 
 ### Historical Bill Search & Reprint (`/` or `s`)
-Need to locate a bill from hours ago or look up a customer's receipt by mobile?
-1. In the **Recent bills** panel, press `/` or `s`.
+Need to locate an earlier bill or look up a customer's receipt by mobile?
+1. While in the **Recent bills & KOTs** panel, press `/` or `s`.
 2. The **Search Historical Bills** modal opens.
 3. Type any search term:
    - Bill ID (e.g. `1`, `42`)
@@ -389,18 +399,19 @@ You can open and edit any of these CSV files with Microsoft Excel, Google Sheets
 
 ---
 
-## 19. Receipt Printing & Local File Storage
+## 19. Receipt Printing & Storage
 
-- **Local Storage**: Every generated bill is written to `bills/` as:
+- **Customer Bill Receipts**: Generated customer receipts are saved to `bills/` as:
   ```text
   bills/bill_<order_id>_<timestamp>.txt
   ```
-- **Kitchen Order Tickets (KOT)**: Saved to `bills/kot_Order_#<id>_<timestamp>.txt`.
-- **Daily Sales Summaries (Z-Reports)**: Saved to `bills/z_report_<date>.txt`.
+  and permanently stored in the `orders` / `order_items` database tables.
+- **Kitchen Order Tickets (KOT)**: Stored directly in the SQLite database (`kots` table) and retrievable via the **KOT Bills** box in the bottom panel. No disk text files are written.
+- **Daily Sales Summaries (Z-Reports)**: Stored directly in the SQLite database (`z_reports` table). No disk text files are written.
 - **Physical Thermal Printers**: If your system has CUPS configured (Linux/macOS) with a default printer:
   - DineInTakeOut automatically sends receipts and KOTs to `lp`.
   - The layout is formatted for standard 42-column 80mm thermal receipt paper.
-  - If a printer is unavailable or offline, files are safely stored without halting the app.
+  - If a printer is unavailable or offline, all records remain safely stored in the database without halting the app.
 
 ---
 
@@ -448,6 +459,8 @@ To protect against system crashes or disk faults:
 | | `5` | Select Have it on Hotel payment mode |
 | | `q` | Display dynamic on-screen UPI QR Code |
 | **Reports & Search**| `z` | Daily Sales Summary & Settlement (Z-Report) |
+| | `←` / `→` or `h` / `l` | Switch between Recent Bills and KOT Bills boxes |
+| | `p` / `r` / `Enter` | Reprint selected bill or KOT ticket (in bottom panel) |
 | | `/` or `s` | Search & reprint historical bills (in Recent Bills) |
 | **General** | `Tab` / `BackTab` | Cycle panel focus |
 | | `[` / `]` | Switch between active open orders |

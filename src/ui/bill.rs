@@ -10,25 +10,44 @@ use ratatui::{
 
 use crate::{
     app::App,
-    models::{Focus, OrderStatus},
+    models::{Focus, OrderStatus, RecentTab},
     receipts::money,
 };
 
 pub fn render_bill(f: &mut Frame, app: &App, area: Rect) {
     if app.focus == Focus::RecentBills {
-        let block = Block::default().borders(Borders::ALL).title(Span::styled(
-            " Previous bill — read only ",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ));
-        let receipt = app
-            .recent_bills
-            .get(app.recent_bill_index)
-            .map(|bill| bill.receipt.as_str())
-            .unwrap_or("No saved bills to review.");
-        f.render_widget(Paragraph::new(receipt).block(block), area);
-        return;
+        match app.recent_tab {
+            RecentTab::Bills => {
+                let block = Block::default().borders(Borders::ALL).title(Span::styled(
+                    " Previous bill — read only ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                let receipt = app
+                    .recent_bills
+                    .get(app.recent_bill_index)
+                    .map(|bill| bill.receipt.as_str())
+                    .unwrap_or("No saved bills to review.");
+                f.render_widget(Paragraph::new(receipt).block(block), area);
+                return;
+            }
+            RecentTab::Kots => {
+                let block = Block::default().borders(Borders::ALL).title(Span::styled(
+                    " KOT Ticket — read only ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                let ticket = app
+                    .recent_kots
+                    .get(app.recent_kot_index)
+                    .map(|kot| kot.ticket_text.as_str())
+                    .unwrap_or("No KOT tickets to review.");
+                f.render_widget(Paragraph::new(ticket).block(block), area);
+                return;
+            }
+        }
     }
 
     if app.orders.is_empty() {

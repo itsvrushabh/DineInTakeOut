@@ -299,34 +299,6 @@ pub fn render_z_report(
     out
 }
 
-pub fn save_kot_to_disk(
-    kot_text: &str,
-    label: &str,
-    id: u32,
-) -> Result<std::path::PathBuf, String> {
-    let bills_dir = std::path::Path::new("bills");
-    let _ = std::fs::create_dir_all(bills_dir);
-    let filename = format!(
-        "kot_{label}_{id}_{}.txt",
-        chrono::Local::now().format("%Y%m%d_%H%M%S")
-    );
-    let path = bills_dir.join(filename);
-    std::fs::write(&path, kot_text).map_err(|e| e.to_string())?;
-    Ok(path)
-}
-
-pub fn save_z_report_to_disk(report_text: &str, date: &str) -> Result<std::path::PathBuf, String> {
-    let bills_dir = std::path::Path::new("bills");
-    let _ = std::fs::create_dir_all(bills_dir);
-    let filename = format!(
-        "z_report_{date}_{}.txt",
-        chrono::Local::now().format("%Y%m%d_%H%M%S")
-    );
-    let path = bills_dir.join(filename);
-    std::fs::write(&path, report_text).map_err(|e| e.to_string())?;
-    Ok(path)
-}
-
 pub fn print_receipt_text(text: &str) -> Result<(), String> {
     use std::io::Write;
     let mut child = std::process::Command::new("lp")

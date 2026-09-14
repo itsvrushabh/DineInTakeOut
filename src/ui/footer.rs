@@ -167,12 +167,19 @@ pub fn render_footer(f: &mut Frame, app: &App, area: Rect) {
         ],
         Focus::RecentBills => vec![
             Span::styled(
-                "[/] ",
+                "[←/→] ",
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw("Search Bills  "),
+            Span::raw("Bills/KOTs  "),
+            Span::styled(
+                "[↑/↓] ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Select  "),
             Span::styled(
                 "[p/Enter] ",
                 Style::default()
@@ -180,6 +187,13 @@ pub fn render_footer(f: &mut Frame, app: &App, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("Reprint  "),
+            Span::styled(
+                "[/] ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Search  "),
             Span::styled(
                 "[z] ",
                 Style::default()

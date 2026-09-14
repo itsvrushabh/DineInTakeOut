@@ -14,13 +14,14 @@ use tokio::sync::Mutex;
 use turso::{Connection, Row, Value};
 
 use crate::models::{
-    Area, BillSummary, BillTotals, CartLine, DailySalesSummary, HistoricalBill, MenuItem, Offer,
-    Order, OrderStatus, PaymentMode, PhysicalTable, Service, TableStatus, CLEANING_MINUTES,
+    Area, BillSummary, BillTotals, CartLine, DailySalesSummary, HistoricalBill, KotSummary,
+    MenuItem, Offer, Order, OrderStatus, PaymentMode, PhysicalTable, Service, TableStatus,
+    CLEANING_MINUTES,
 };
 
 const TIMESTAMP_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 
-const SCHEMA: [&str; 9] = [
+const SCHEMA: [&str; 11] = [
     "CREATE TABLE IF NOT EXISTS menu_items (
          name         TEXT PRIMARY KEY,
          category     TEXT NOT NULL,
@@ -94,6 +95,25 @@ const SCHEMA: [&str; 9] = [
          id                INTEGER PRIMARY KEY AUTOINCREMENT,
          name              TEXT NOT NULL,
          discount_percent  REAL NOT NULL CHECK (discount_percent >= 0 AND discount_percent <= 100)
+     )",
+    "CREATE TABLE IF NOT EXISTS kots (
+         id          INTEGER PRIMARY KEY AUTOINCREMENT,
+         order_id    INTEGER NOT NULL,
+         label       TEXT NOT NULL,
+         area        TEXT NOT NULL DEFAULT '',
+         item_count  INTEGER NOT NULL DEFAULT 0,
+         ticket_text TEXT NOT NULL,
+         is_reprint  INTEGER NOT NULL DEFAULT 0,
+         created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+     )",
+    "CREATE TABLE IF NOT EXISTS z_reports (
+         id          INTEGER PRIMARY KEY AUTOINCREMENT,
+         report_date TEXT NOT NULL,
+         gross_sales REAL NOT NULL DEFAULT 0,
+         net_sales   REAL NOT NULL DEFAULT 0,
+         bill_count  INTEGER NOT NULL DEFAULT 0,
+         report_text TEXT NOT NULL,
+         created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
      )",
 ];
 
@@ -962,6 +982,115 @@ impl Database {
                 });
             }
             bills
+        })
+    }
+
+    /// Saves a kitchen order ticket (KOT) directly to the database.
+    pub fn save_kot(
+        &self,
+        order_id: u32,
+        label: &str,
+        area: &str,
+        item_count: u32,
+        ticket_text: &str,
+        is_reprint: bool,
+    ) -> Result<u32, String> {
+        self.rt.block_on(async {
+            let conn = self.conn.lock().await;
+            conn.execute(
+                "INSERT INTO kots (order_id, label, area, item_count, ticket_text, is_reprint)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                (
+                    i64::from(order_id),
+                    label,
+                    area,
+                    i64::from(item_count),
+                    ticket_text,
+                    is_reprint as i64,
+                ),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+            let mut rows = conn
+                .query("SELECT last_insert_rowid()", ())
+                .await
+                .map_err(|e| e.to_string())?;
+            if let Ok(Some(row)) = rows.next().await {
+                Ok(row_i64(&row, 0) as u32)
+            } else {
+                Ok(0)
+            }
+        })
+    }
+
+    /// Loads the most recent kitchen order tickets (newest first, up to 10).
+    pub fn load_recent_kots(&self) -> Vec<KotSummary> {
+        self.rt.block_on(async {
+            let conn = self.conn.lock().await;
+            let mut rows = match conn
+                .query(
+                    "SELECT id, order_id, label, area, item_count, ticket_text, is_reprint, created_at
+                     FROM kots ORDER BY id DESC LIMIT 10",
+                    (),
+                )
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => return Vec::new(),
+            };
+
+            let mut kots = Vec::new();
+            while let Ok(Some(row)) = rows.next().await {
+                kots.push(KotSummary {
+                    id: row_i64(&row, 0) as u32,
+                    order_id: row_i64(&row, 1) as u32,
+                    label: row_string(&row, 2),
+                    area: row_string(&row, 3),
+                    item_count: row_i64(&row, 4) as u32,
+                    ticket_text: row_string(&row, 5),
+                    is_reprint: row_i64(&row, 6) != 0,
+                    created_at: row_string(&row, 7),
+                });
+            }
+            kots
+        })
+    }
+
+    /// Saves a daily sales summary / Z-Report directly to the database.
+    pub fn save_z_report(
+        &self,
+        report_date: &str,
+        gross_sales: f64,
+        net_sales: f64,
+        bill_count: u32,
+        report_text: &str,
+    ) -> Result<u32, String> {
+        self.rt.block_on(async {
+            let conn = self.conn.lock().await;
+            conn.execute(
+                "INSERT INTO z_reports (report_date, gross_sales, net_sales, bill_count, report_text)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                (
+                    report_date,
+                    gross_sales,
+                    net_sales,
+                    i64::from(bill_count),
+                    report_text,
+                ),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+            let mut rows = conn
+                .query("SELECT last_insert_rowid()", ())
+                .await
+                .map_err(|e| e.to_string())?;
+            if let Ok(Some(row)) = rows.next().await {
+                Ok(row_i64(&row, 0) as u32)
+            } else {
+                Ok(0)
+            }
         })
     }
     /// Upserts the state of one physical table.

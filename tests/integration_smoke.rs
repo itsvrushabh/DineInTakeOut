@@ -7,7 +7,7 @@ use dinein_takeout_billing::{
     app::{init_physical_tables, App},
     config::{export_menu_csv, load_areas_csv, load_menu, load_offers_csv},
     db::Database,
-    models::{Area, Focus, MenuItem, Offer, OrderStatus, PaymentMode, TableStatus},
+    models::{Area, Focus, MenuItem, Offer, OrderStatus, PaymentMode, RecentTab, TableStatus},
     receipts::{money, render_receipt},
     ui::ui,
 };
@@ -71,6 +71,9 @@ fn fixture() -> (App, PathBuf) {
         notifications: Vec::new(),
         recent_bills: Vec::new(),
         recent_bill_index: 0,
+        recent_kots: Vec::new(),
+        recent_kot_index: 0,
+        recent_tab: RecentTab::Bills,
         focus_return: Focus::Cart,
         database: Some(database),
         mobile_buffer: String::new(),
@@ -481,6 +484,11 @@ fn pos_features_kot_and_item_notes() {
     // Generate KOT
     app.generate_kot();
     assert_eq!(app.order().kot_sent_count, 1);
+    assert_eq!(app.recent_kots.len(), 1);
+    assert_eq!(app.recent_kots[0].item_count, 1);
+    assert!(app.recent_kots[0]
+        .ticket_text
+        .contains("SHREE KRISHNA RESTAURANT"));
     let kot_text =
         dinein_takeout_billing::receipts::render_kot(app.order(), false, &app.restaurant_name);
     assert!(kot_text.contains("SHREE KRISHNA RESTAURANT"));
@@ -765,6 +773,73 @@ fn csv_sources_and_hotel_bill_details() {
     assert!(receipt.contains("Contact: +91 98765 43210"));
     assert!(receipt.contains("GST: 27TESTGST"));
     assert!(receipt.contains("Mobile: 9998887776"));
+
+    let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn two_box_recent_bills_and_kots_in_db() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let (mut app, database_path) = fixture();
+
+    // 1. Open order, add items, and generate KOT
+    app.open_takeout_order();
+    app.add_selected_to_cart();
+    app.generate_kot();
+
+    // Verify KOT is stored in recent_kots and in database
+    assert_eq!(app.recent_kots.len(), 1);
+    assert_eq!(app.recent_kots[0].item_count, 1);
+    let db = app.database.as_ref().unwrap();
+    let loaded_kots = db.load_recent_kots();
+    assert_eq!(loaded_kots.len(), 1);
+    assert_eq!(loaded_kots[0].item_count, 1);
+    assert_eq!(loaded_kots[0].label, "TK1");
+
+    // 2. Complete the bill
+    app.complete_billing("9991112222", None);
+    app.select_payment_mode(PaymentMode::Cash);
+    app.close_order();
+    assert_eq!(app.recent_bills.len(), 1);
+
+    // 3. Test Navigation in Focus::RecentBills between Bills box and KOTs box
+    app.focus = Focus::RecentBills;
+    assert_eq!(app.recent_tab, RecentTab::Bills);
+
+    // Switch to KOTs box with right arrow / l
+    app.handle_key(KeyCode::Right);
+    assert_eq!(app.recent_tab, RecentTab::Kots);
+
+    // Switch back to Bills box with left arrow / h
+    app.handle_key(KeyCode::Left);
+    assert_eq!(app.recent_tab, RecentTab::Bills);
+
+    // 4. Test rendering of both boxes in UI
+    let backend = TestBackend::new(100, 35);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    // In Bills tab
+    app.recent_tab = RecentTab::Bills;
+    terminal.draw(|frame| ui(frame, &app)).unwrap();
+
+    // In KOTs tab
+    app.recent_tab = RecentTab::Kots;
+    terminal.draw(|frame| ui(frame, &app)).unwrap();
+
+    // 5. Test Z-Report saved to database (no disk files)
+    app.open_daily_report();
+    app.print_daily_report();
+
+    // Verify that bills/ directory has NO .txt files
+    if let Ok(entries) = std::fs::read_dir("bills") {
+        let txt_count = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "txt"))
+            .count();
+        assert_eq!(txt_count, 0, "No .txt files should be written to bills/");
+    }
 
     let _ = fs::remove_file(database_path);
 }

@@ -14,8 +14,9 @@ use crate::{
     },
     db::Database,
     models::{
-        Area, BillSummary, CartLine, DailySalesSummary, Focus, HistoricalBill, MenuItem, Offer,
-        Order, OrderStatus, PaymentMode, PhysicalTable, Service, TableStatus, CLEANING_MINUTES,
+        Area, BillSummary, CartLine, DailySalesSummary, Focus, HistoricalBill, KotSummary,
+        MenuItem, Offer, Order, OrderStatus, PaymentMode, PhysicalTable, RecentTab, Service,
+        TableStatus, CLEANING_MINUTES,
     },
     receipts::render_receipt,
 };
@@ -47,13 +48,16 @@ pub struct App {
     pub notifications: Vec<(String, chrono::DateTime<Local>)>,
     pub recent_bills: Vec<BillSummary>, // newest first, up to five completed bills
     pub recent_bill_index: usize,
-    pub focus_return: Focus,        // panel to restore when the prompt closes
+    pub recent_kots: Vec<KotSummary>, // newest first, up to ten KOTs
+    pub recent_kot_index: usize,
+    pub recent_tab: RecentTab, // active box in Recent panel (Bills vs KOTs)
+    pub focus_return: Focus,   // panel to restore when the prompt closes
     pub database: Option<Database>, // None only when the DB could not be opened
-    pub mobile_buffer: String,      // customer mobile captured in the billing prompt
-    pub payment_mode_index: usize,  // selection inside the payment-mode popup
-    pub close_on_payment: bool,     // true if payment modal closes order, false if updating bill
-    pub offer_index: usize,         // selection inside the offer-selection popup
-    pub pending_mobile: String,     // customer mobile captured before offer pick
+    pub mobile_buffer: String, // customer mobile captured in the billing prompt
+    pub payment_mode_index: usize, // selection inside the payment-mode popup
+    pub close_on_payment: bool, // true if payment modal closes order, false if updating bill
+    pub offer_index: usize,    // selection inside the offer-selection popup
+    pub pending_mobile: String, // customer mobile captured before offer pick
     pub show_help: bool,
     pub table_input: String,
     pub table_search_index: usize,
@@ -332,10 +336,10 @@ impl App {
             }
         };
 
-        let recent_bills = if let Some(db) = &database {
-            db.load_recent_bills()
+        let (recent_bills, recent_kots) = if let Some(db) = &database {
+            (db.load_recent_bills(), db.load_recent_kots())
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         let next_takeout_id = max_takeout_number(&orders).saturating_add(1);
 
@@ -364,6 +368,9 @@ impl App {
             notifications: Vec::new(),
             recent_bills,
             recent_bill_index: 0,
+            recent_kots,
+            recent_kot_index: 0,
+            recent_tab: RecentTab::Bills,
             focus_return: Focus::Cart,
             database,
             mobile_buffer: String::new(),
@@ -1025,14 +1032,47 @@ impl App {
         }
         let is_reprint = order.kot_sent_count > 0;
         let kot_text = crate::receipts::render_kot(order, is_reprint, &self.restaurant_name);
-        let path = match crate::receipts::save_kot_to_disk(&kot_text, &order.label, order.id) {
-            Ok(p) => format!("Saved: {}", p.display()),
-            Err(e) => format!("Save error: {e}"),
-        };
-        let _ = crate::receipts::print_receipt_text(&kot_text);
         let count: u32 = order.cart.iter().map(|l| l.qty).sum();
+        let area = order.area.clone().unwrap_or_default();
+        let label = order.label.clone();
+        let order_id = order.id;
+
+        let kot_id = if let Some(db) = &self.database {
+            match db.save_kot(order_id, &label, &area, count, &kot_text, is_reprint) {
+                Ok(id) => id,
+                Err(e) => {
+                    self.notify(format!("DB KOT save error: {e}"));
+                    0
+                }
+            }
+        } else {
+            0
+        };
+
+        let now_str = chrono::Local::now().format("%H:%M:%S").to_string();
+        self.recent_kots.insert(
+            0,
+            KotSummary {
+                id: kot_id,
+                order_id,
+                label: label.clone(),
+                area,
+                item_count: count,
+                ticket_text: kot_text.clone(),
+                is_reprint,
+                created_at: now_str,
+            },
+        );
+        self.recent_kots.truncate(10);
+
+        let _ = crate::receipts::print_receipt_text(&kot_text);
         self.order_mut().kot_sent_count += 1;
-        self.notify(format!("KOT sent to kitchen ({count} items). {path}"));
+        self.notify(format!(
+            "KOT #{} saved to DB & sent to kitchen ({} items) for {}.",
+            if kot_id > 0 { kot_id } else { order_id },
+            count,
+            label
+        ));
     }
 
     pub fn open_daily_report(&mut self) {
@@ -1051,21 +1091,33 @@ impl App {
     }
 
     pub fn print_daily_report(&mut self) {
-        if let Some(summary) = &self.daily_report_summary {
-            let text = crate::receipts::render_z_report(
-                summary,
-                &self.restaurant_name,
-                &self.restaurant_address,
-                &self.restaurant_contact,
-                &self.gst_number,
-            );
-            let path = match crate::receipts::save_z_report_to_disk(&text, &summary.date) {
-                Ok(p) => format!("Saved: {}", p.display()),
-                Err(e) => format!("Save error: {e}"),
-            };
-            let _ = crate::receipts::print_receipt_text(&text);
-            self.notify(format!("Z-Report printed! {path}"));
+        let summary = match &self.daily_report_summary {
+            Some(s) => s.clone(),
+            None => return,
+        };
+        let text = crate::receipts::render_z_report(
+            &summary,
+            &self.restaurant_name,
+            &self.restaurant_address,
+            &self.restaurant_contact,
+            &self.gst_number,
+        );
+        if let Some(db) = &self.database {
+            if let Err(e) = db.save_z_report(
+                &summary.date,
+                summary.subtotal + summary.ac_charge + summary.tax,
+                summary.total_sales,
+                summary.total_orders as u32,
+                &text,
+            ) {
+                self.notify(format!("DB Z-Report save error: {e}"));
+            }
         }
+        let _ = crate::receipts::print_receipt_text(&text);
+        self.notify(format!(
+            "Z-Report for {} saved to DB & printed!",
+            summary.date
+        ));
     }
 
     pub fn open_bill_search(&mut self) {
@@ -1681,20 +1733,43 @@ impl App {
                 _ => {}
             },
             Focus::RecentBills => match key {
-                KeyCode::Up | KeyCode::Char('k') => {
-                    self.recent_bill_index = self.recent_bill_index.saturating_sub(1);
+                KeyCode::Left | KeyCode::Char('h') => {
+                    self.recent_tab = RecentTab::Bills;
                 }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    if self.recent_bill_index + 1 < self.recent_bills.len() {
-                        self.recent_bill_index += 1;
+                KeyCode::Right | KeyCode::Char('l') => {
+                    self.recent_tab = RecentTab::Kots;
+                }
+                KeyCode::Up | KeyCode::Char('k') => match self.recent_tab {
+                    RecentTab::Bills => {
+                        self.recent_bill_index = self.recent_bill_index.saturating_sub(1);
                     }
-                }
+                    RecentTab::Kots => {
+                        self.recent_kot_index = self.recent_kot_index.saturating_sub(1);
+                    }
+                },
+                KeyCode::Down | KeyCode::Char('j') => match self.recent_tab {
+                    RecentTab::Bills => {
+                        if self.recent_bill_index + 1 < self.recent_bills.len() {
+                            self.recent_bill_index += 1;
+                        }
+                    }
+                    RecentTab::Kots => {
+                        if self.recent_kot_index + 1 < self.recent_kots.len() {
+                            self.recent_kot_index += 1;
+                        }
+                    }
+                },
                 KeyCode::Char('/') | KeyCode::Char('s') => {
                     self.open_bill_search();
                 }
-                KeyCode::Char('p') | KeyCode::Char('r') | KeyCode::Enter => {
-                    self.reprint_selected_recent_bill();
-                }
+                KeyCode::Char('p') | KeyCode::Char('r') | KeyCode::Enter => match self.recent_tab {
+                    RecentTab::Bills => {
+                        self.reprint_selected_recent_bill();
+                    }
+                    RecentTab::Kots => {
+                        self.reprint_selected_recent_kot();
+                    }
+                },
                 KeyCode::Tab => self.focus = Focus::Search,
                 KeyCode::BackTab => self.focus = Focus::Tables,
                 _ => {}
@@ -1944,6 +2019,13 @@ impl App {
             }
             let _ = crate::receipts::print_receipt_text(&bill.receipt);
             self.notify(format!("Reprinted Bill #{bill_id}!"));
+        }
+    }
+
+    pub fn reprint_selected_recent_kot(&mut self) {
+        if let Some(kot) = self.recent_kots.get(self.recent_kot_index) {
+            let _ = crate::receipts::print_receipt_text(&kot.ticket_text);
+            self.notify(format!("Reprinted KOT #{} for {}!", kot.id, kot.label));
         }
     }
 

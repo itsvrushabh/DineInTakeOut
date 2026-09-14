@@ -391,7 +391,7 @@ pub fn render_daily_report(f: &mut Frame, app: &App) {
         )),
         Line::raw("────────────────────────────────────────────────────────────"),
         Line::styled(
-            " [p] Print / Save Z-Report to bills/   ·   [Esc/z/Enter] Close",
+            " [p] Print & Save Z-Report to DB   ·   [Esc/z/Enter] Close",
             Style::default().fg(Color::DarkGray),
         ),
     ];

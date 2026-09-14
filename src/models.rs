@@ -417,6 +417,24 @@ impl Order {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecentTab {
+    Bills,
+    Kots,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct KotSummary {
+    pub id: u32,
+    pub order_id: u32,
+    pub label: String,
+    pub area: String,
+    pub item_count: u32,
+    pub ticket_text: String,
+    pub is_reprint: bool,
+    pub created_at: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct BillSummary {
     pub id: u32,

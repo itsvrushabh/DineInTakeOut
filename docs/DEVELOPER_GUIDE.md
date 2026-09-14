@@ -260,12 +260,13 @@ Receipts are formatted using fixed-width text matching standard 80mm thermal pap
 - Header indicates `*** KITCHEN ORDER TICKET (KOT) ***` or `*** KITCHEN ORDER TICKET [REPRINT] ***`.
 - Omits prices and taxes to streamline food preparation.
 - Prints special instructions clearly beneath each dish item.
+- Persisted directly into the Turso SQLite `kots` table, immediately updating the in-app dual-box **KOT Bills** log without writing `.txt` files to disk.
 
 ### Dynamic Unicode Half-Block QR Code
 `generate_upi_qr_blocks(uri)` converts an NPCI UPI URI string into high-contrast terminal rows using UTF-8 half-block characters (`▀`, `▄`, `█`, ` `), allowing scanability directly off computer screens without specialized graphical windows.
 
 ### CUPS Printing Integration
-`print_receipt_text(text)` attempts to spawn `lp` via `std::process::Command`. If `lp` is not in `$PATH` or returns a non-zero exit code, the error is logged without failing the billing transaction. All output is archived to `bills/`.
+`print_receipt_text(text)` attempts to spawn `lp` via `std::process::Command`. If `lp` is not in `$PATH` or returns a non-zero exit code, the error is logged without failing the billing transaction. Customer bill receipts are saved to `bills/`, while KOT slips and Z-reports are persisted directly to Turso SQLite database tables (`kots` and `z_reports`).
 
 ---
 

@@ -21,6 +21,8 @@
 | `p` (or `b` in Tables) | Generate active bill; or update payment type (UPI, Cash, Card) if already paid |
 | `q` | Display dynamic on-screen UPI QR code (in payment modal) |
 | `z` | Open Daily Sales Summary (Z-Report) & Settlement breakdown |
+| `←` / `→` or `h` / `l` | Switch between Recent Bills and KOT Bills boxes (in Recent panel) |
+| `p` / `r` / `Enter` | Reprint selected bill or KOT ticket (in Recent panel) |
 | `/` or `s` | Search and reprint historical bills by Bill ID or Mobile (in Recent Bills) |
 | `t` | Open take-out order |
 | `s` | Advance the active order: Taking order → Serving → Ready for bill |
@@ -98,7 +100,7 @@ printed on the receipt and stored with the paid order in the database.
 
 - While editing an active order cart, select an item and press `n` to attach a kitchen instruction (e.g. "Less spicy", "No garlic", "Crispy").
 - Press `k` to dispatch the order to the kitchen.
-- The KOT prints a 42-column slip without prices or taxes, showing table/order, timestamp, items, quantities, and notes. Subsequent KOT prints for the same table automatically display `[REPRINT]`. Slips are archived in `bills/`.
+- The KOT prints a 42-column slip without prices or taxes, showing table/order, timestamp, items, quantities, and notes. Subsequent KOT prints for the same table automatically display `[REPRINT]`. Slips are stored directly in the database (`kots` table) and displayed in the **KOT Bills** box without creating disk files.
 
 ## Out-of-Stock / "86" Toggling (`o`)
 
@@ -111,13 +113,16 @@ printed on the receipt and stored with the paid order in the database.
 
 - Press `z` from anywhere in the application to view the Day/Shift summary.
 - Displays total order count (dine-in vs take-out), gross subtotal, applied discounts, AC surcharges, GST collected, net revenue, and a breakdown across all payment methods.
-- Press `p` inside the Z-report modal to export the report to `bills/z_report_YYYY-MM-DD.txt` and send it to the system printer.
+- Press `p` inside the Z-report modal to save the report to the database (`z_reports` table) and send it to the system printer.
 
-## Historical Bill Search & Reprint (`/` or `s` in Recent Bills)
+## Recent Bills & KOTs Dual-Box & Search (`/` or `s`)
 
-- Focus the **Recent Bills** panel (`Tab`) and press `/` or `s`.
-- Enter any Bill ID (e.g. `5`) or customer mobile number (e.g. `98765`) to filter across the entire database history.
-- Use `↑`/`↓` to highlight a bill and press `Enter` or `p` to reprint the thermal receipt.
+- Focus the bottom panel (`Tab`).
+- The panel is split into two boxes: **Recent Bills** (left) and **KOT Bills** (right).
+- Use `←` / `→` (or `h` / `l`) to toggle between the two boxes.
+- Use `↑` / `↓` (or `j` / `k`) to browse items. The right panel renders the full receipt or KOT ticket.
+- Press `p`, `r`, or `Enter` to reprint the selected bill or KOT ticket.
+- Press `/` or `s` in Recent Bills to search historical bills by Bill ID or customer mobile across the entire database history.
 
 ---
 

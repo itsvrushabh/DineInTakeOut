@@ -220,9 +220,68 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 ```
 Standard keys:
-- `'GSTNumber'`: The restaurant's registered GSTIN (printed on receipts).
-- `'AcRate'`: Surcharge percentage rate for AC dining areas (e.g. `'6.0'`).
-- `'UpiId'`: Virtual Payment Address (VPA) for dynamic UPI QR generation (e.g. `'merchant@upi'`).
+- `'restaurant_name'`: The hotel / restaurant name (e.g. `'SHREE KRISHNA RESTAURANT'`).
+- `'restaurant_address'`: Physical address (printed on receipts).
+- `'restaurant_contact'`: Phone / mobile contact (printed on receipts).
+- `'gst_number'`: The restaurant's registered GSTIN (printed on receipts).
+- `'ac_rate'`: Surcharge percentage rate for AC dining areas (e.g. `'6.0'`).
+- `'upi_id'`: Virtual Payment Address (VPA) for dynamic UPI QR generation (e.g. `'shreekrishna@upi'`).
+
+---
+
+### Table 10: `kots`
+Persistent storage for all Kitchen Order Tickets (KOT) sent to the kitchen.
+
+```sql
+CREATE TABLE IF NOT EXISTS kots (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id    INTEGER NOT NULL,
+    label       TEXT NOT NULL,
+    area        TEXT NOT NULL DEFAULT '',
+    item_count  INTEGER NOT NULL DEFAULT 0,
+    ticket_text TEXT NOT NULL,
+    is_reprint  INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+```
+
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `INTEGER` | `PRIMARY KEY AUTOINCREMENT` | Unique ticket sequence ID |
+| `order_id` | `INTEGER` | `NOT NULL` | Associated open or paid order ID |
+| `label` | `TEXT` | `NOT NULL` | Table or takeout label (e.g. `AC-T4`, `TK1`) |
+| `area` | `TEXT` | `NOT NULL DEFAULT ''` | Dining area name |
+| `item_count` | `INTEGER` | `NOT NULL DEFAULT 0` | Total quantity of items in ticket |
+| `ticket_text` | `TEXT` | `NOT NULL` | Full rendered 42-column KOT ticket |
+| `is_reprint` | `INTEGER` | `NOT NULL DEFAULT 0` | 1 if duplicate / reprint, 0 for initial print |
+| `created_at` | `TEXT` | `DEFAULT datetime('now', 'localtime')` | Ticket creation timestamp |
+
+---
+
+### Table 11: `z_reports`
+Archived daily sales and shift settlement reports.
+
+```sql
+CREATE TABLE IF NOT EXISTS z_reports (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_date TEXT NOT NULL,
+    gross_sales REAL NOT NULL DEFAULT 0,
+    net_sales   REAL NOT NULL DEFAULT 0,
+    bill_count  INTEGER NOT NULL DEFAULT 0,
+    report_text TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+```
+
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `INTEGER` | `PRIMARY KEY AUTOINCREMENT` | Unique report sequence ID |
+| `report_date` | `TEXT` | `NOT NULL` | Sales report date (`YYYY-MM-DD`) |
+| `gross_sales` | `REAL` | `NOT NULL DEFAULT 0` | Total sales before deductions |
+| `net_sales` | `REAL` | `NOT NULL DEFAULT 0` | Net collected revenue |
+| `bill_count` | `INTEGER` | `NOT NULL DEFAULT 0` | Total settled orders for the day |
+| `report_text` | `TEXT` | `NOT NULL` | Complete rendered 42-column Z-Report text |
+| `created_at` | `TEXT` | `DEFAULT datetime('now', 'localtime')` | Report generation timestamp |
 
 ---
 
