@@ -1310,3 +1310,650 @@ fn pos_advanced_backup_retention_purge() {
 
     let _ = fs::remove_dir_all(temp_dir);
 }
+
+#[test]
+fn comprehensive_ui_views_and_modals_render() {
+    let (mut app, database_path) = fixture();
+    let mut terminal = Terminal::new(TestBackend::new(140, 45)).unwrap();
+
+    // 1. Full non-compact standard layout
+    terminal.draw(|f| ui(f, &app)).unwrap();
+
+    // 2. KDS empty
+    app.focus = Focus::KitchenDisplay;
+    app.kds_kots.clear();
+    terminal.draw(|f| ui(f, &app)).unwrap();
+
+    // 3. KDS with multiple tickets and statuses
+    app.kds_kots = vec![
+        dinein_takeout_billing::models::KotSummary {
+            id: 1,
+            order_id: 10,
+            label: "T-1".into(),
+            area: "Main Hall".into(),
+            item_count: 2,
+            ticket_text: "ITEM                           QTY\n------------------------------------------\nMasala Dosa                      2\n  ↳ Extra chutney\nSend to Kitchen".into(),
+            is_reprint: false,
+            created_at: "2026-09-14 20:00:00".into(),
+            status: "PENDING".into(),
+        },
+        dinein_takeout_billing::models::KotSummary {
+            id: 2,
+            order_id: 11,
+            label: "T-2".into(),
+            area: "AC Dining".into(),
+            item_count: 1,
+            ticket_text: "ITEM                           QTY\nPaneer Curry                     1\nSend to Kitchen".into(),
+            is_reprint: false,
+            created_at: "2026-09-14 21:20:00".into(),
+            status: "PREPARING".into(),
+        },
+        dinein_takeout_billing::models::KotSummary {
+            id: 3,
+            order_id: 12,
+            label: "Take-Out #1".into(),
+            area: "".into(),
+            item_count: 3,
+            ticket_text: "ITEM                           QTY\nSamosa                           3\nSend to Kitchen".into(),
+            is_reprint: false,
+            created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            status: "READY".into(),
+        },
+        dinein_takeout_billing::models::KotSummary {
+            id: 4,
+            order_id: 13,
+            label: "T-3".into(),
+            area: "Patio".into(),
+            item_count: 1,
+            ticket_text: "ITEM                           QTY\nChai                             1\nSend to Kitchen".into(),
+            is_reprint: false,
+            created_at: "invalid_time_format".into(),
+            status: "SERVED".into(),
+        },
+    ];
+    app.kds_index = 1;
+    terminal.draw(|f| ui(f, &app)).unwrap();
+
+    // 4. Sales Analytics Modal
+    app.focus = Focus::Analytics;
+    app.sales_analytics = Some(dinein_takeout_billing::models::SalesAnalytics {
+        date: "2026-09-14".into(),
+        total_orders: 20,
+        gross_sales: 6000.0,
+        total_discounts: 300.0,
+        total_tax: 270.0,
+        cgst: 135.0,
+        sgst: 135.0,
+        net_sales: 5970.0,
+        avg_bill_value: 298.5,
+        payment_breakdown: vec![
+            ("CASH".into(), 10, 3000.0),
+            ("UPI".into(), 8, 2500.0),
+            ("CARD".into(), 2, 470.0),
+        ],
+        top_items: vec![
+            ("Samosa".into(), 30, 600.0),
+            ("Paneer Curry".into(), 15, 1500.0),
+        ],
+    });
+    terminal.draw(|f| ui(f, &app)).unwrap();
+
+    // 5. Mobile Entry Modal (without CRM, with CRM, 10 digits)
+    app.focus = Focus::MobileEntry;
+    app.mobile_buffer = "98765".into();
+    terminal.draw(|f| ui(f, &app)).unwrap();
+
+    app.mobile_buffer = "9876543210".into();
+    app.customer_crm = Some(dinein_takeout_billing::models::CustomerCrmProfile {
+        phone: "9876543210".into(),
+        visit_count: 5,
+        total_spent: 3500.0,
+        favorite_items: vec![("Paneer Curry".into(), 6)],
+        last_visit: Some("2026-09-10".into()),
+    });
+    terminal.draw(|f| ui(f, &app)).unwrap();
+
+    // 6. Payment Mode Modal
+    app.focus = Focus::PaymentMode;
+    terminal.draw(|f| ui(f, &app)).unwrap();
+
+    // 7. Offer Select Modal
+    app.focus = Focus::OfferSelect;
+    terminal.draw(|f| ui(f, &app)).unwrap();
+
+    // 8. Daily Report Modal
+    app.focus = Focus::DailyReport;
+    app.daily_report_summary = Some(dinein_takeout_billing::models::DailySalesSummary {
+        date: "2026-09-14".into(),
+        total_orders: 10,
+        dine_in_orders: 6,
+        takeout_orders: 4,
+        subtotal: 2500.0,
+        discount: 100.0,
+        ac_charge: 50.0,
+        tax: 120.0,
+        total_sales: 2570.0,
+        cash_count: 4,
+        cash_total: 1000.0,
+        upi_count: 5,
+        upi_total: 1200.0,
+        card_count: 1,
+        card_total: 370.0,
+        split_count: 0,
+        split_total: 0.0,
+        person_credit_count: 0,
+        person_credit_total: 0.0,
+        have_it_on_hotel_count: 0,
+        have_it_on_hotel_total: 0.0,
+        other_count: 0,
+        other_total: 0.0,
+    });
+    terminal.draw(|f| ui(f, &app)).unwrap();
+
+    // 9. Bill Search Modal
+    app.focus = Focus::BillSearch;
+    app.bill_search_query = "9876".into();
+    app.bill_search_results = vec![
+        dinein_takeout_billing::models::HistoricalBill {
+            id: 1,
+            label: "T-1".into(),
+            service: dinein_takeout_billing::models::Service::DineIn,
+            customer_mobile: "9876543210".into(),
+            total: 350.0,
+            payment_mode: Some(PaymentMode::Cash),
+            created_at: "2026-09-14 12:00".into(),
+        }
+    ];
+    app.bill_search_index = 0;
+    terminal.draw(|f| ui(f, &app)).unwrap();
+
+    // 10. UPI QR Modal
+    app.open_takeout_order();
+    app.add_selected_to_cart();
+    app.focus = Focus::UpiQr;
+    terminal.draw(|f| ui(f, &app)).unwrap();
+
+    // 11. Table Move Modal
+    app.focus = Focus::TableMove;
+    terminal.draw(|f| ui(f, &app)).unwrap();
+
+    // 12. Item Note Modal
+    app.focus = Focus::ItemNote;
+    app.item_note_buffer = "Extra spicy, no garlic".into();
+    terminal.draw(|f| ui(f, &app)).unwrap();
+
+    // 13. Split Payment Modal
+    app.focus = Focus::SplitPayment;
+    app.split_cash = "50".into();
+    app.split_upi = "50".into();
+    app.split_card = "0".into();
+    terminal.draw(|f| ui(f, &app)).unwrap();
+
+    // 14. Switch recent tab to KOTs
+    app.focus = Focus::RecentBills;
+    app.recent_tab = RecentTab::Kots;
+    app.recent_kots = vec![dinein_takeout_billing::models::KotSummary {
+        id: 99,
+        order_id: 1,
+        label: "T-1".into(),
+        area: "Main Hall".into(),
+        item_count: 1,
+        ticket_text: "Sample ticket".into(),
+        is_reprint: false,
+        status: "SERVED".into(),
+        created_at: "12:00:00".into(),
+    }];
+    terminal.draw(|f| ui(f, &app)).unwrap();
+
+    // 15. Search focus with query
+    app.focus = Focus::Search;
+    app.search = "sam".into();
+    terminal.draw(|f| ui(f, &app)).unwrap();
+
+    // 16. Tall search bar (height >= 3)
+    let tall_area = ratatui::layout::Rect { x: 0, y: 0, width: 60, height: 4 };
+    terminal.draw(|f| dinein_takeout_billing::ui::search::render_search(f, &app, tall_area)).unwrap();
+    app.search.clear();
+    app.focus = Focus::Menu;
+    terminal.draw(|f| dinein_takeout_billing::ui::search::render_search(f, &app, tall_area)).unwrap();
+
+    // 17. Bill rendering with various order statuses & cart items
+    let bill_area = ratatui::layout::Rect { x: 0, y: 0, width: 60, height: 25 };
+    app.focus = Focus::Cart;
+    app.order_mut().status = OrderStatus::Serving;
+    terminal.draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area)).unwrap();
+
+    app.order_mut().status = OrderStatus::BillRequested;
+    terminal.draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area)).unwrap();
+
+    app.order_mut().status = OrderStatus::Paid;
+    app.order_mut().payment_mode = None;
+    terminal.draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area)).unwrap();
+
+    app.order_mut().payment_mode = Some(PaymentMode::Upi);
+    app.order_mut().cart[0].kot_sent_qty = 1; // partial KOT
+    terminal.draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area)).unwrap();
+
+    app.order_mut().cart[0].kot_sent_qty = 2; // full KOT
+    terminal.draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area)).unwrap();
+
+    // Bill in recent bills mode
+    app.focus = Focus::RecentBills;
+    app.recent_tab = RecentTab::Bills;
+    terminal.draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area)).unwrap();
+    app.recent_tab = RecentTab::Kots;
+    terminal.draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area)).unwrap();
+
+    // 18. Table details with Dirty and Paid states
+    let table_area = ratatui::layout::Rect { x: 0, y: 0, width: 34, height: 8 };
+    app.focus = Focus::Tables;
+    app.physical_tables[0].status = TableStatus::Dirty;
+    app.physical_tables[0].dirty_since = Some(chrono::Local::now() - chrono::Duration::minutes(3));
+    terminal.draw(|f| dinein_takeout_billing::ui::table_info::render_table_info(f, &app, table_area)).unwrap();
+
+    app.physical_tables[0].status = TableStatus::Paid;
+    terminal.draw(|f| dinein_takeout_billing::ui::table_info::render_table_info(f, &app, table_area)).unwrap();
+
+    // 19. All Footers
+    let footer_area = ratatui::layout::Rect { x: 0, y: 0, width: 140, height: 1 };
+    for focus in [
+        Focus::Menu,
+        Focus::Cart,
+        Focus::Tables,
+        Focus::RecentBills,
+        Focus::Search,
+        Focus::MobileEntry,
+        Focus::PaymentMode,
+        Focus::OfferSelect,
+        Focus::DailyReport,
+        Focus::BillSearch,
+        Focus::UpiQr,
+        Focus::TableMove,
+        Focus::ItemNote,
+        Focus::KitchenDisplay,
+        Focus::SplitPayment,
+        Focus::Analytics,
+        Focus::TableJump,
+    ] {
+        app.focus = focus;
+        terminal.draw(|f| dinein_takeout_billing::ui::footer::render_footer(f, &app, footer_area)).unwrap();
+    }
+
+    let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn comprehensive_app_event_handling_and_shortcuts() {
+    let (mut app, database_path) = fixture();
+
+    // Order switching '[' and ']' with no orders
+    assert!(!app.handle_key(KeyCode::Char('[')));
+    assert!(!app.handle_key(KeyCode::Char(']')));
+
+    // Open two orders
+    app.open_takeout_order();
+    app.add_selected_to_cart();
+    app.open_takeout_order();
+    assert_eq!(app.orders.len(), 2);
+    assert_eq!(app.active_order, 1);
+    app.handle_key(KeyCode::Char(']'));
+    assert_eq!(app.active_order, 0);
+    app.handle_key(KeyCode::Char('['));
+    assert_eq!(app.active_order, 1);
+
+    // Help toggle
+    assert!(!app.show_help);
+    app.handle_key(KeyCode::Char('?'));
+    assert!(app.show_help);
+    app.handle_key(KeyCode::Char('?'));
+    assert!(!app.show_help);
+
+    // Numbered box jumping 1-7
+    for ch in ['1', '2', '3', '4', '5', '6', '7'] {
+        app.handle_key(KeyCode::Char(ch));
+    }
+
+    // Cart line quantity adjustments
+    app.active_order = 0;
+    app.adjust_selected_line_quantity(1);
+    assert_eq!(app.order().cart[0].qty, 2);
+    app.adjust_selected_line_quantity(-1);
+    assert_eq!(app.order().cart[0].qty, 1);
+    // Cannot decrease below 1
+    app.adjust_selected_line_quantity(-1);
+    assert_eq!(app.order().cart[0].qty, 1);
+
+    // Clear active cart
+    app.clear_active_cart();
+    assert!(app.order().cart.is_empty());
+
+    // Cart operations on empty order or non-editable
+    app.adjust_selected_line_quantity(1);
+    app.remove_selected_line();
+    app.clear_active_cart();
+
+    // Re-add item to cart
+    app.add_selected_to_cart();
+    assert_eq!(app.order().cart.len(), 1);
+
+    // Complimentary toggle
+    app.toggle_selected_line_complimentary();
+    assert!(app.order().cart[0].is_complimentary);
+    app.toggle_selected_line_complimentary();
+    assert!(!app.order().cart[0].is_complimentary);
+
+    // Cycle discounts (0 -> 10 -> 20 -> 50 -> 100 -> 0)
+    for _ in 0..5 {
+        app.cycle_selected_line_discount();
+    }
+    assert_eq!(app.order().cart[0].discount_percent, 0.0);
+
+    // Item notes workflow
+    app.open_item_note_prompt();
+    assert_eq!(app.focus, Focus::ItemNote);
+    app.handle_key(KeyCode::Char('E'));
+    app.handle_key(KeyCode::Char('x'));
+    app.handle_key(KeyCode::Backspace);
+    app.handle_key(KeyCode::Enter);
+    assert_eq!(app.order().cart[0].note.as_deref(), Some("E"));
+
+    // Item note cancel
+    app.open_item_note_prompt();
+    app.handle_key(KeyCode::Esc);
+    assert_ne!(app.focus, Focus::ItemNote);
+
+    // Stock toggle (86)
+    app.focus = Focus::Menu;
+    assert!(app.items[app.menu_index].is_available);
+    app.toggle_selected_menu_item_stock();
+    assert!(!app.items[app.menu_index].is_available);
+    app.toggle_selected_menu_item_stock();
+    assert!(app.items[app.menu_index].is_available);
+
+    // Category cycling via Right / Left
+    app.handle_key(KeyCode::Right);
+    assert_eq!(app.selected_category_index, 1);
+    app.handle_key(KeyCode::Left);
+    assert_eq!(app.selected_category_index, 0);
+
+    // Table move workflow
+    app.open_table_order();
+    app.open_table_move();
+    assert_eq!(app.focus, Focus::TableMove);
+    app.handle_key(KeyCode::Down);
+    app.handle_key(KeyCode::Up);
+    app.handle_key(KeyCode::Esc);
+    assert_ne!(app.focus, Focus::TableMove);
+
+    // Daily report shortcut 'z'
+    app.handle_key(KeyCode::Char('z'));
+    assert_eq!(app.focus, Focus::DailyReport);
+    app.handle_key(KeyCode::Esc);
+    assert_ne!(app.focus, Focus::DailyReport);
+
+    // Analytics shortcut 'a' / 'A' / F8
+    app.handle_key(KeyCode::F(8));
+    assert_eq!(app.focus, Focus::Analytics);
+    app.handle_key(KeyCode::Esc);
+
+    // KDS shortcut F7
+    app.handle_key(KeyCode::F(7));
+    assert_eq!(app.focus, Focus::KitchenDisplay);
+    // KDS navigation
+    app.handle_key(KeyCode::Down);
+    app.handle_key(KeyCode::Up);
+    app.handle_key(KeyCode::Char('s'));
+    app.handle_key(KeyCode::Char('w'));
+    app.handle_key(KeyCode::Char('r'));
+    app.handle_key(KeyCode::F(5));
+    app.handle_key(KeyCode::Char(' ')); // bump status
+    app.handle_key(KeyCode::Esc); // exit KDS
+    assert_ne!(app.focus, Focus::KitchenDisplay);
+
+    // UPI QR workflow
+    app.show_upi_qr();
+    assert_eq!(app.focus, Focus::UpiQr);
+    app.handle_key(KeyCode::Enter);
+    assert_ne!(app.focus, Focus::UpiQr);
+
+    // Bill Search workflow
+    app.open_bill_search();
+    assert_eq!(app.focus, Focus::BillSearch);
+    app.handle_key(KeyCode::Char('1'));
+    app.handle_key(KeyCode::Down);
+    app.handle_key(KeyCode::Up);
+    app.handle_key(KeyCode::Enter); // reprint attempt
+    app.handle_key(KeyCode::Esc);
+    assert_ne!(app.focus, Focus::BillSearch);
+
+    // Table cleaning tick and manual clean
+    app.tick_cleaning();
+    app.clean_selected_table();
+
+    // Table search / jump workflow
+    app.focus = Focus::TableJump;
+    app.handle_key(KeyCode::Char('1'));
+    app.handle_key(KeyCode::Backspace);
+    app.handle_key(KeyCode::Esc);
+
+    // Notification tick
+    app.notify("Test notification");
+    app.tick_notification();
+
+    let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn pos_deep_workflows_and_edge_cases() {
+    let (mut app, database_path) = fixture();
+
+    // 1. Focus::Tables key events
+    app.focus = Focus::Tables;
+    app.handle_key(KeyCode::Char('l')); // table right
+    app.handle_key(KeyCode::Char('h')); // table left
+    app.handle_key(KeyCode::Char('j')); // area down
+    app.handle_key(KeyCode::Char('k')); // area up
+    app.handle_key(KeyCode::Char('t')); // open takeout
+    assert_eq!(app.orders.len(), 1);
+    app.add_selected_to_cart();
+    app.focus = Focus::Tables;
+    app.handle_key(KeyCode::Char('s')); // advance stage
+    app.handle_key(KeyCode::Char('r')); // clean table
+    app.handle_key(KeyCode::Char('K')); // generate KOT
+    app.handle_key(KeyCode::Char('g')); // table jump
+    assert_eq!(app.focus, Focus::TableJump);
+    app.handle_key(KeyCode::Esc);
+    assert_eq!(app.focus, Focus::Tables);
+    app.handle_key(KeyCode::Tab);
+    assert_eq!(app.focus, Focus::Search);
+    app.focus = Focus::Tables;
+    app.handle_key(KeyCode::BackTab);
+    assert_eq!(app.focus, Focus::RecentBills);
+
+    // 2. Focus::RecentBills key events
+    app.handle_key(KeyCode::Char('l')); // Kots tab
+    assert_eq!(app.recent_tab, RecentTab::Kots);
+    app.handle_key(KeyCode::Char('h')); // Bills tab
+    assert_eq!(app.recent_tab, RecentTab::Bills);
+    app.handle_key(KeyCode::Char('j')); // down
+    app.handle_key(KeyCode::Char('k')); // up
+    app.handle_key(KeyCode::Char('p')); // reprint
+    app.handle_key(KeyCode::Char('/')); // open bill search
+    assert_eq!(app.focus, Focus::BillSearch);
+    app.handle_key(KeyCode::Esc);
+    app.focus = Focus::RecentBills;
+    app.handle_key(KeyCode::Char('K')); // open KDS
+    assert_eq!(app.focus, Focus::KitchenDisplay);
+    app.handle_key(KeyCode::Esc);
+    app.focus = Focus::RecentBills;
+    app.recent_tab = RecentTab::Bills;
+    app.handle_key(KeyCode::Tab); // switch to Kots
+    assert_eq!(app.recent_tab, RecentTab::Kots);
+    app.handle_key(KeyCode::Tab); // switch to Tables
+    assert_eq!(app.focus, Focus::Tables);
+
+    // 3. Focus::TableJump workflow
+    app.focus = Focus::TableJump;
+    app.handle_key(KeyCode::Char('M'));
+    app.handle_key(KeyCode::Char('a'));
+    app.handle_key(KeyCode::Down);
+    app.handle_key(KeyCode::Up);
+    app.handle_key(KeyCode::Tab);
+    app.handle_key(KeyCode::BackTab);
+    app.handle_key(KeyCode::Enter); // jump
+    assert_eq!(app.focus, Focus::Tables);
+
+    // 4. Focus::PaymentMode key events
+    app.focus = Focus::PaymentMode;
+    app.handle_key(KeyCode::Char('j')); // down
+    app.handle_key(KeyCode::Char('k')); // up
+    app.handle_key(KeyCode::Char('c')); // Cash
+    app.focus = Focus::PaymentMode;
+    app.handle_key(KeyCode::Char('u')); // Upi
+    app.focus = Focus::PaymentMode;
+    app.handle_key(KeyCode::Char('d')); // Card
+    app.focus = Focus::PaymentMode;
+    app.handle_key(KeyCode::Char('1')); // 1: Cash
+    app.focus = Focus::PaymentMode;
+    app.handle_key(KeyCode::Char('2')); // 2: UPI
+    app.focus = Focus::PaymentMode;
+    app.handle_key(KeyCode::Char('3')); // 3: Card
+    app.focus = Focus::PaymentMode;
+    app.handle_key(KeyCode::Char('4')); // 4: Split
+    assert_eq!(app.focus, Focus::SplitPayment);
+    app.handle_key(KeyCode::Esc);
+    assert_eq!(app.focus, Focus::PaymentMode);
+    app.handle_key(KeyCode::Char('q')); // UPI QR
+    assert_eq!(app.focus, Focus::UpiQr);
+    app.handle_key(KeyCode::Char('q'));
+    assert_ne!(app.focus, Focus::UpiQr);
+
+    // 5. Focus::SplitPayment workflow
+    app.focus = Focus::SplitPayment;
+    let (total, _, _, _) = app.split_payment_totals();
+    // Auto-fill cash field
+    app.handle_key(KeyCode::Char('a'));
+    assert!(!app.split_cash.is_empty());
+    // Cycle fields Tab and BackTab
+    app.handle_key(KeyCode::Tab);
+    assert_eq!(app.split_field, 1); // UPI
+    app.handle_key(KeyCode::Char('1'));
+    app.handle_key(KeyCode::Char('.'));
+    app.handle_key(KeyCode::Char('5'));
+    app.handle_key(KeyCode::Backspace);
+    app.handle_key(KeyCode::Tab);
+    assert_eq!(app.split_field, 2); // Card
+    app.handle_key(KeyCode::BackTab);
+    assert_eq!(app.split_field, 1);
+    app.handle_key(KeyCode::Up);
+    assert_eq!(app.split_field, 0);
+    app.handle_key(KeyCode::Down);
+    assert_eq!(app.split_field, 1);
+    // Confirm valid split
+    app.split_cash = format!("{total:.2}");
+    app.split_upi = "0.00".into();
+    app.split_card = "0.00".into();
+    app.handle_key(KeyCode::Enter);
+    assert_ne!(app.focus, Focus::SplitPayment);
+
+    // 6. Focus::OfferSelect workflow
+    app.focus = Focus::OfferSelect;
+    app.handle_key(KeyCode::Char('j'));
+    app.handle_key(KeyCode::Char('k'));
+    app.handle_key(KeyCode::Char('0')); // No offer
+    assert_ne!(app.focus, Focus::OfferSelect);
+
+    // 7. Focus::DailyReport print
+    app.focus = Focus::DailyReport;
+    app.handle_key(KeyCode::Char('p'));
+    app.handle_key(KeyCode::Char('z'));
+    assert_ne!(app.focus, Focus::DailyReport);
+
+    // 8. Order reprints
+    app.reprint_full_kot();
+
+    let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn app_bootstrap_new_and_lifecycle() {
+    let mut app = App::new();
+    assert!(!app.restaurant_name.is_empty());
+    assert!(!app.physical_tables.is_empty());
+    assert!(!app.items.is_empty());
+
+    // Tick notification and cleaning
+    app.notify("Boot notification");
+    app.tick_notification();
+    let _ = app.tick_cleaning();
+
+    // Table jump matching
+    app.table_input = "Main".into();
+    let matches = app.matching_tables();
+    assert!(!matches.is_empty());
+
+    // UPI QR URI generation
+    let uri_res = app.upi_qr_uri_and_blocks();
+    assert_eq!(uri_res.is_some(), !app.orders.is_empty());
+
+    // Open an order and test UPI QR
+    app.open_takeout_order();
+    app.add_selected_to_cart();
+    let uri_res2 = app.upi_qr_uri_and_blocks();
+    assert!(uri_res2.is_some());
+    let (uri, blocks, total) = uri_res2.unwrap();
+    assert!(uri.starts_with("upi://pay"));
+    assert!(!blocks.is_empty());
+    assert!(total > 0.0);
+}
+
+#[test]
+fn app_cancellation_and_table_merge_workflows() {
+    let (mut app, database_path) = fixture();
+
+    // Cancellation with no order
+    app.cancel_order();
+
+    // Open table 1 order and cancel it
+    app.selected_area_index = 0;
+    app.selected_table_index = 0;
+    app.open_table_order();
+    assert_eq!(app.orders.len(), 1);
+    assert_eq!(app.physical_tables[0].status, TableStatus::Ordering);
+    app.cancel_order();
+    assert_eq!(app.orders.len(), 0);
+    assert_eq!(app.physical_tables[0].status, TableStatus::Ready);
+
+    // Open takeout order and cancel it
+    app.open_takeout_order();
+    assert_eq!(app.orders.len(), 1);
+    app.cancel_order();
+    assert_eq!(app.orders.len(), 0);
+
+    // Table move to empty table
+    app.selected_area_index = 0;
+    app.selected_table_index = 0;
+    app.open_table_order();
+    app.add_selected_to_cart();
+    assert_eq!(app.order().cart.len(), 1);
+
+    // Targets for table 1 should include table 2 (empty)
+    let targets = app.table_move_targets();
+    assert!(!targets.is_empty());
+    app.table_move_target_index = 0;
+    app.execute_table_move_or_merge();
+    assert_eq!(app.physical_tables[0].status, TableStatus::Ready);
+    assert_eq!(app.physical_tables[1].status, TableStatus::Ordering);
+
+    // Now open an order on table 1 and merge it into table 2
+    app.selected_table_index = 0;
+    app.open_table_order();
+    app.add_selected_to_cart();
+    app.execute_table_move_or_merge(); // merge into table 2
+    assert_eq!(app.physical_tables[0].status, TableStatus::Ready);
+
+    let _ = fs::remove_file(database_path);
+}
+
+
+

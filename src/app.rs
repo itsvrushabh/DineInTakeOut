@@ -774,6 +774,10 @@ impl App {
     }
 
     pub fn cancel_order(&mut self) {
+        if self.orders.is_empty() {
+            self.notify(String::from("No active order to cancel."));
+            return;
+        }
         let order = self.order();
         let table_info = order
             .table_number

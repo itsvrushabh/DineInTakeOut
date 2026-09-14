@@ -367,3 +367,191 @@ pub fn send_bytes(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{CartLine, Order, OrderStatus, PaymentMode, Service};
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_printer_config_default_and_from_map() {
+        let def = PrinterConfig::default();
+        assert_eq!(def.mode, PrinterMode::Lpr);
+        assert!(def.bill_printer.is_empty());
+        assert!(def.kot_printer.is_empty());
+        assert!(def.cash_drawer_enabled);
+
+        let mut map = HashMap::new();
+        map.insert("PrinterMode".into(), "device".into());
+        map.insert("BillPrinter".into(), "/dev/usb/lp1".into());
+        map.insert("KotPrinter".into(), "/dev/usb/lp2".into());
+        map.insert("CashDrawerEnabled".into(), "false".into());
+        let cfg = PrinterConfig::from_map(&map);
+        assert_eq!(cfg.mode, PrinterMode::Device("/dev/usb/lp1".into()));
+        assert_eq!(cfg.bill_printer, "/dev/usb/lp1");
+        assert_eq!(cfg.kot_printer, "/dev/usb/lp2");
+        assert!(!cfg.cash_drawer_enabled);
+
+        let mut map2 = HashMap::new();
+        map2.insert("PrinterMode".into(), "usb".into());
+        let cfg2 = PrinterConfig::from_map(&map2);
+        assert_eq!(cfg2.mode, PrinterMode::Device("/dev/usb/lp0".into()));
+
+        let mut map3 = HashMap::new();
+        map3.insert("PrinterMode".into(), "network".into());
+        let cfg3 = PrinterConfig::from_map(&map3);
+        assert_eq!(cfg3.mode, PrinterMode::Network("127.0.0.1:9100".into()));
+
+        let mut map4 = HashMap::new();
+        map4.insert("PrinterMode".into(), "tcp".into());
+        map4.insert("BillPrinter".into(), "192.168.1.50:9100".into());
+        let cfg4 = PrinterConfig::from_map(&map4);
+        assert_eq!(cfg4.mode, PrinterMode::Network("192.168.1.50:9100".into()));
+
+        let mut map5 = HashMap::new();
+        map5.insert("PrinterMode".into(), "simulated".into());
+        let cfg5 = PrinterConfig::from_map(&map5);
+        assert_eq!(cfg5.mode, PrinterMode::Simulated);
+
+        let mut map6 = HashMap::new();
+        map6.insert("PrinterMode".into(), "unknown_value".into());
+        let cfg6 = PrinterConfig::from_map(&map6);
+        assert_eq!(cfg6.mode, PrinterMode::Lpr);
+    }
+
+    fn test_order(id: u32, label: &str, area: Option<&str>, is_ac: bool) -> Order {
+        Order {
+            id,
+            label: label.to_string(),
+            service: Service::DineIn,
+            table_number: Some(1),
+            area: area.map(|a| a.to_string()),
+            is_ac,
+            ac_rate: if is_ac { 0.05 } else { 0.0 },
+            discount_percent: 0.0,
+            cart: Vec::new(),
+            cart_index: 0,
+            status: OrderStatus::Ordering,
+            customer_mobile: None,
+            payment_mode: None,
+            kot_sent_count: 0,
+        }
+    }
+
+    #[test]
+    fn test_build_escpos_receipt() {
+        let mut order = test_order(42, "T-1", Some("AC Room"), true);
+        let mut line1 = CartLine::new("Paneer Butter Masala", 250.0, 2);
+        line1.note = Some("Extra spicy".into());
+        let mut line2 = CartLine::new("Butter Naan", 40.0, 3);
+        line2.is_complimentary = true;
+        let mut line3 = CartLine::new("Gulab Jamun", 50.0, 1);
+        line3.discount_percent = 20.0;
+        order.cart.push(line1);
+        order.cart.push(line2);
+        order.cart.push(line3);
+        order.payment_mode = Some(PaymentMode::Upi);
+
+        let bytes_default = build_escpos_receipt(&order, "", "", "", "", None, false);
+        assert!(!bytes_default.is_empty());
+        assert!(bytes_default.windows(ESC_CUT_PAPER.len()).any(|w| w == ESC_CUT_PAPER));
+
+        let bytes = build_escpos_receipt(
+            &order,
+            "TEST RESTAURANT",
+            "123 Main St",
+            "9999999999",
+            "GST12345",
+            Some("9876543210"),
+            true,
+        );
+        let str_rep = String::from_utf8_lossy(&bytes);
+        assert!(str_rep.contains("TEST RESTAURANT"));
+        assert!(str_rep.contains("123 Main St"));
+        assert!(str_rep.contains("Contact: 9999999999"));
+        assert!(str_rep.contains("GSTIN: GST12345"));
+        assert!(str_rep.contains("Customer: 9876543210"));
+        assert!(str_rep.contains("Paneer Butter Masala"));
+        assert!(str_rep.contains("Extra spicy"));
+        assert!(str_rep.contains("[NC]"));
+        assert!(str_rep.contains("[DISC]"));
+        assert!(str_rep.contains("GRAND TOTAL"));
+        assert!(str_rep.contains("Settled Via"));
+        assert!(bytes.windows(ESC_DRAWER_KICK.len()).any(|w| w == ESC_DRAWER_KICK));
+    }
+
+    #[test]
+    fn test_build_escpos_kot() {
+        let mut order = test_order(10, "Table 5", Some("Garden"), false);
+        let mut line = CartLine::new("Veg Biryani", 180.0, 2);
+        line.note = Some("Less oil".into());
+        order.cart.push(line.clone());
+
+        let bytes1 = build_escpos_kot(&order, &order.cart, false, false, "KOT RESTAURANT");
+        let str1 = String::from_utf8_lossy(&bytes1);
+        assert!(str1.contains("*** KOT (KITCHEN ORDER) ***"));
+        assert!(str1.contains("AREA : Garden"));
+        assert!(str1.contains("Veg Biryani"));
+        assert!(str1.contains("Less oil"));
+
+        let bytes2 = build_escpos_kot(&order, &order.cart, true, false, "");
+        let str2 = String::from_utf8_lossy(&bytes2);
+        assert!(str2.contains("*** KOT [REPRINT] ***"));
+        assert!(str2.contains("SHREE KRISHNA RESTAURANT"));
+
+        let bytes3 = build_escpos_kot(&order, &order.cart, false, true, "TEST");
+        let str3 = String::from_utf8_lossy(&bytes3);
+        assert!(str3.contains("*** KOT [ADD-ON / DELTA] ***"));
+    }
+
+    #[test]
+    fn test_send_bytes_simulated_and_device_and_network() {
+        let sim_config = PrinterConfig {
+            mode: PrinterMode::Simulated,
+            ..Default::default()
+        };
+        assert!(send_bytes(&sim_config, None, b"TEST DATA").is_ok());
+        let _ = std::fs::remove_dir_all("receipts");
+
+        let temp_file = std::env::temp_dir().join(format!("mock_device_{}", std::process::id()));
+        let _ = std::fs::File::create(&temp_file).unwrap();
+        let dev_config = PrinterConfig {
+            mode: PrinterMode::Device(temp_file.to_str().unwrap().to_string()),
+            ..Default::default()
+        };
+        assert!(send_bytes(&dev_config, None, b"DEVICE BYTES").is_ok());
+        let read_bytes = std::fs::read(&temp_file).unwrap();
+        assert_eq!(read_bytes, b"DEVICE BYTES");
+        let _ = std::fs::remove_file(&temp_file);
+
+        let err_config = PrinterConfig {
+            mode: PrinterMode::Device("/dev/nonexistent_dir/printer_xyz".into()),
+            ..Default::default()
+        };
+        assert!(send_bytes(&err_config, None, b"ERR").is_err());
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let local_addr = listener.local_addr().unwrap().to_string();
+        let net_config = PrinterConfig {
+            mode: PrinterMode::Network(local_addr),
+            ..Default::default()
+        };
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                use std::io::Read;
+                let mut buf = [0u8; 16];
+                let _ = stream.read(&mut buf);
+            }
+        });
+        assert!(send_bytes(&net_config, None, b"NET BYTES").is_ok());
+        let _ = handle.join();
+
+        let bad_addr_cfg = PrinterConfig {
+            mode: PrinterMode::Network("invalid-address".into()),
+            ..Default::default()
+        };
+        assert!(send_bytes(&bad_addr_cfg, None, b"FAIL").is_err());
+    }
+}
+

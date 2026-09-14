@@ -382,3 +382,199 @@ fn center(text: &str, width: usize) -> String {
     let padding = width.saturating_sub(text.chars().count()) / 2;
     format!("{}{}", " ".repeat(padding), text)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{CartLine, DailySalesSummary, Order, OrderStatus, PaymentMode, Service};
+
+    #[test]
+    fn test_money_and_center() {
+        assert_eq!(money(150.0), "₹150.00");
+        assert_eq!(money(-42.5), "-₹42.50");
+        assert_eq!(money(0.0), "₹0.00");
+
+        let centered = center("HELLO", 11);
+        assert_eq!(centered, "   HELLO");
+
+        let exact = center("EXACT", 5);
+        assert_eq!(exact, "EXACT");
+
+        let overflow = center("LONGSTRING", 4);
+        assert_eq!(overflow, "LONGSTRING");
+    }
+
+    #[test]
+    fn test_generate_upi_qr_blocks() {
+        let uri = "upi://pay?pa=test@upi&pn=Rest&am=100.00&cu=INR";
+        let blocks = generate_upi_qr_blocks(uri).unwrap();
+        assert!(!blocks.is_empty());
+        assert!(blocks.iter().any(|line| line.contains('█') || line.contains('▀') || line.contains('▄')));
+    }
+
+    #[test]
+    fn test_render_receipt_variations() {
+        let mut order = Order {
+            id: 101,
+            label: "Table 3".into(),
+            service: Service::DineIn,
+            table_number: Some(3),
+            area: Some("AC Hall".into()),
+            is_ac: true,
+            ac_rate: 0.05,
+            discount_percent: 10.0,
+            cart: vec![
+                {
+                    let mut item = CartLine::new("Special Thali", 200.0, 2);
+                    item.note = Some("No onions".into());
+                    item
+                },
+                {
+                    let mut item = CartLine::new("Papad", 15.0, 1);
+                    item.is_complimentary = true;
+                    item
+                },
+                {
+                    let mut item = CartLine::new("Dessert", 80.0, 1);
+                    item.discount_percent = 25.0;
+                    item
+                },
+            ],
+            cart_index: 0,
+            status: OrderStatus::Paid,
+            customer_mobile: Some("9876543210".into()),
+            payment_mode: Some(PaymentMode::Cash),
+            kot_sent_count: 3,
+        };
+
+        // Render with full header details
+        let r1 = render_receipt(
+            &order,
+            None,
+            "27TESTGSTIN",
+            "KRISHNA BHOJ",
+            "Market Road",
+            "1234567890",
+        );
+        assert!(r1.contains("KRISHNA BHOJ"));
+        assert!(r1.contains("Market Road"));
+        assert!(r1.contains("Contact: 1234567890"));
+        assert!(r1.contains("GST: 27TESTGSTIN"));
+        assert!(r1.contains("Bill #101"));
+        assert!(r1.contains("Mobile: 9876543210"));
+        assert!(r1.contains("Special Thali"));
+        assert!(r1.contains("↳ No onions"));
+        assert!(r1.contains("[NC]"));
+        assert!(r1.contains("[DISC]"));
+        assert!(r1.contains("Discount"));
+        assert!(r1.contains("AC Surcharge"));
+        assert!(r1.contains("Payment: CASH"));
+
+        // Render default restaurant name with no optional lines
+        order.service = Service::TakeOut;
+        order.payment_mode = None;
+        order.customer_mobile = None;
+        let r2 = render_receipt(&order, Some("9999988888"), "", "", "", "");
+        assert!(r2.contains("SHREE KRISHNA RESTAURANT"));
+        assert!(r2.contains("Mobile: 9999988888"));
+        assert!(r2.contains("Mode : TAKE-OUT"));
+    }
+
+    #[test]
+    fn test_render_kot_variations() {
+        let order = Order {
+            id: 202,
+            label: "T-5".into(),
+            service: Service::DineIn,
+            table_number: Some(5),
+            area: Some("Patio".into()),
+            is_ac: false,
+            ac_rate: 0.0,
+            discount_percent: 0.0,
+            cart: vec![
+                {
+                    let mut line = CartLine::new("Masala Dosa", 90.0, 2);
+                    line.note = Some("Crispy".into());
+                    line
+                },
+            ],
+            cart_index: 0,
+            status: OrderStatus::Ordering,
+            customer_mobile: None,
+            payment_mode: None,
+            kot_sent_count: 0,
+        };
+
+        let kot1 = render_kot(&order, false, "SOUTH INDIAN CAFE");
+        assert!(kot1.contains("SOUTH INDIAN CAFE"));
+        assert!(kot1.contains("*** KITCHEN ORDER TICKET (KOT) ***"));
+        assert!(kot1.contains("Area         : Patio"));
+        assert!(kot1.contains("Masala Dosa"));
+        assert!(kot1.contains("↳ Crispy"));
+
+        let kot2 = render_kot(&order, true, "");
+        assert!(kot2.contains("*** KITCHEN ORDER TICKET [REPRINT] ***"));
+        assert!(kot2.contains("SHREE KRISHNA RESTAURANT"));
+
+        let kot_delta = render_kot_items(&order, &order.cart, false, true, "TEST");
+        assert!(kot_delta.contains("*** KITCHEN ORDER TICKET (ADD-ON / DELTA) ***"));
+    }
+
+    #[test]
+    fn test_render_daily_sales_report() {
+        let summary = DailySalesSummary {
+            date: "2026-09-14".into(),
+            total_orders: 15,
+            dine_in_orders: 10,
+            takeout_orders: 5,
+            subtotal: 5000.0,
+            discount: 200.0,
+            ac_charge: 150.0,
+            tax: 250.0,
+            total_sales: 5200.0,
+            cash_count: 5,
+            cash_total: 2000.0,
+            upi_count: 6,
+            upi_total: 2200.0,
+            card_count: 2,
+            card_total: 600.0,
+            split_count: 1,
+            split_total: 200.0,
+            person_credit_count: 1,
+            person_credit_total: 200.0,
+            have_it_on_hotel_count: 1,
+            have_it_on_hotel_total: 200.0,
+            other_count: 0,
+            other_total: 0.0,
+        };
+
+        let report = render_z_report(
+            &summary,
+            "KRISHNA",
+            "Highway Stop",
+            "9876543210",
+            "27GSTIN123",
+        );
+        assert!(report.contains("DAILY SALES & SETTLEMENT REPORT"));
+        assert!(report.contains("Report Date  : 2026-09-14"));
+        assert!(report.contains("Discounts Given"));
+        assert!(report.contains("AC Surcharges"));
+        assert!(report.contains("GST Collected"));
+        assert!(report.contains("Person Credit"));
+        assert!(report.contains("On Hotel"));
+        assert!(report.contains("TOTAL NET SALES"));
+
+        // With zero discounts, zero AC, empty GST
+        let mut s2 = summary.clone();
+        s2.discount = 0.0;
+        s2.ac_charge = 0.0;
+        s2.person_credit_count = 0;
+        s2.have_it_on_hotel_count = 0;
+        s2.other_count = 2;
+        s2.other_total = 400.0;
+        let r2 = render_z_report(&s2, "", "", "", "");
+        assert!(r2.contains("SHREE KRISHNA RESTAURANT"));
+        assert!(r2.contains("Unsettled"));
+        assert!(!r2.contains("Discounts Given"));
+    }
+}

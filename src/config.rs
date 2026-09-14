@@ -339,4 +339,108 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn areas_csv_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("test_areas_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("areas.csv");
+
+        let input_areas = vec![
+            Area {
+                name: "Rooftop".to_string(),
+                is_ac: false,
+                table_count: 5,
+            },
+            Area {
+                name: "VIP Lounge".to_string(),
+                is_ac: true,
+                table_count: 3,
+            },
+        ];
+
+        export_areas_csv(&path, &input_areas).unwrap();
+        let loaded = load_areas_csv(&path).unwrap();
+
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].name, "Rooftop");
+        assert!(!loaded[0].is_ac);
+        assert_eq!(loaded[0].table_count, 5);
+        assert_eq!(loaded[1].name, "VIP Lounge");
+        assert!(loaded[1].is_ac);
+        assert_eq!(loaded[1].table_count, 3);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn offers_csv_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("test_offers_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("offers.csv");
+
+        let input_offers = vec![
+            Offer {
+                id: 0,
+                name: "Festive Discount".to_string(),
+                discount_percent: 15.0,
+            },
+            Offer {
+                id: 0,
+                name: "Happy Hour".to_string(),
+                discount_percent: 20.0,
+            },
+        ];
+
+        export_offers_csv(&path, &input_offers).unwrap();
+        let loaded = load_offers_csv(&path).unwrap();
+
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].name, "Festive Discount");
+        assert_eq!(loaded[0].discount_percent, 15.0);
+        assert_eq!(loaded[1].name, "Happy Hour");
+        assert_eq!(loaded[1].discount_percent, 20.0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn menu_csv_roundtrip_and_availability_flags() {
+        let dir = std::env::temp_dir().join(format!("test_menu_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("menu.csv");
+
+        let items = vec![
+            MenuItem::new("Starters", "Paneer Tikka", "plate", 180.0),
+            MenuItem::new("Mains", "Dal Tadka", "bowl", 120.0),
+        ];
+
+        export_menu_csv(&path, &items).unwrap();
+        let loaded = load_menu(&path).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].name, "Paneer Tikka");
+        assert!(loaded[0].is_available);
+
+        // Custom CSV testing 86 / unavailable values and invalid rows
+        let custom_csv = "Category,Item Name,Unit,Price,Available\n\
+                          Drinks,Mango Lassi,glass,50,no\n\
+                          Drinks,Cold Coffee,glass,60,false\n\
+                          Drinks,Sweet Lime,glass,40,out\n\
+                          Food,,plate,100,yes\n\
+                          Food,Invalid Price,plate,-10,yes\n\
+                          Food,Veg Pulao,plate,110,yes\n";
+        std::fs::write(&path, custom_csv).unwrap();
+        let parsed = load_menu(&path).unwrap();
+        assert_eq!(parsed.len(), 4);
+        assert_eq!(parsed[0].name, "Mango Lassi");
+        assert!(!parsed[0].is_available);
+        assert_eq!(parsed[1].name, "Cold Coffee");
+        assert!(!parsed[1].is_available);
+        assert_eq!(parsed[2].name, "Sweet Lime");
+        assert!(!parsed[2].is_available);
+        assert_eq!(parsed[3].name, "Veg Pulao");
+        assert!(parsed[3].is_available);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

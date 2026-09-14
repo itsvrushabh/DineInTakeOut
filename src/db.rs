@@ -1875,4 +1875,74 @@ mod tests {
         assert!(new_file.exists());
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn areas_settings_offers_and_z_report_persistence() {
+        let db = Database::open_for_tests();
+
+        // Areas
+        let areas = vec![
+            Area {
+                name: "Garden".into(),
+                is_ac: false,
+                table_count: 10,
+            },
+            Area {
+                name: "Banquet".into(),
+                is_ac: true,
+                table_count: 5,
+            },
+        ];
+        db.replace_areas(&areas).unwrap();
+        let loaded_areas = db.load_areas();
+        assert_eq!(loaded_areas.len(), 2);
+        assert_eq!(loaded_areas[0].name, "Garden");
+        assert_eq!(loaded_areas[1].name, "Banquet");
+
+        // Settings
+        db.set_setting("RestaurantName", "SHREE GANESH").unwrap();
+        assert_eq!(db.get_setting("RestaurantName"), "SHREE GANESH");
+        assert_eq!(db.get_setting("NonexistentKey"), "");
+
+        // Offers
+        let offers = vec![
+            crate::models::Offer {
+                id: 1,
+                name: "Weekend Special".into(),
+                discount_percent: 15.0,
+            },
+        ];
+        db.replace_offers(&offers).unwrap();
+        let loaded_offers = db.load_offers();
+        assert_eq!(loaded_offers.len(), 1);
+        assert_eq!(loaded_offers[0].name, "Weekend Special");
+        assert_eq!(loaded_offers[0].discount_percent, 15.0);
+
+        // Delete open order
+        let mut open_ord = sample_order(505);
+        open_ord.status = OrderStatus::Ordering;
+        db.save_open_order(&open_ord).unwrap();
+        assert_eq!(db.load_open_orders().len(), 1);
+        db.delete_open_order(505).unwrap();
+        assert_eq!(db.load_open_orders().len(), 0);
+
+        // Z-Report persistence
+        let summary = db.get_daily_sales_summary("2026-09-14");
+        let report_id = db
+            .save_z_report(
+                "2026-09-14",
+                summary.subtotal,
+                summary.total_sales,
+                summary.total_orders as u32,
+                "RAW REPORT TEXT",
+            )
+            .unwrap();
+        assert!(report_id > 0);
+
+        // Load recent KOTs
+        let kot_id = db.save_kot(505, "T5", "Garden", 1, "Ticket", true).unwrap();
+        assert!(kot_id > 0);
+        let recent_kots = db.load_recent_kots();
+        assert!(!recent_kots.is_empty());
+    }
 }
