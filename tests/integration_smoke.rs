@@ -13,14 +13,19 @@ use dinein_takeout_billing::{
 };
 use ratatui::{backend::TestBackend, Terminal};
 
+use std::sync::atomic::{AtomicU64, Ordering};
+static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 fn test_path(name: &str) -> PathBuf {
+    let count = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!(
-        "dinein_takeout_{name}_{}_{}",
+        "dinein_takeout_{name}_{}_{}_{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        count
     ));
     let _ = fs::remove_file(&path);
     path
@@ -76,10 +81,12 @@ fn fixture() -> (App, PathBuf) {
         database: Some(database),
         mobile_buffer: String::new(),
         payment_mode_index: 0,
+        close_on_payment: false,
         offer_index: 0,
         pending_mobile: String::new(),
         show_help: false,
         table_input: String::new(),
+        table_search_index: 0,
     };
     (app, database_path)
 }
@@ -212,5 +219,233 @@ fn all_primary_ui_states_render_on_compact_backend() {
         .map(|cell| cell.symbol())
         .collect();
     assert!(text.contains("Notice"));
+    assert!(text.contains("Table Details"));
+    let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn table_details_and_order_tracking_work() {
+    let (mut app, database_path) = fixture();
+    // Default table: Main Hall, Table 1
+    assert_eq!(app.selected_area_name(), "Main Hall");
+    assert_eq!(app.selected_table_index, 0);
+
+    let pt = app
+        .selected_physical_table()
+        .expect("physical table exists");
+    assert_eq!(pt.area, "Main Hall");
+    assert_eq!(pt.number, 1);
+    assert_eq!(pt.status, TableStatus::Ready);
+    assert!(app.selected_table_order().is_none());
+
+    // Open an order on Main Hall Table 1
+    app.open_table_order();
+    let order = app.selected_table_order().expect("order active on table");
+    assert_eq!(order.label, "Main-T1");
+    assert_eq!(order.status, OrderStatus::Ordering);
+
+    // Selected physical table now reflects taking order
+    let pt2 = app.selected_physical_table().unwrap();
+    assert_eq!(pt2.status, TableStatus::Ordering);
+
+    let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn table_search_and_jump_workflow_works() {
+    let (mut app, database_path) = fixture();
+    // Start in Focus::Tables
+    app.focus = Focus::Tables;
+
+    // Press 'g' to trigger table jump search
+    assert!(!app.handle_key(KeyCode::Char('g')));
+    assert_eq!(app.focus, Focus::TableJump);
+
+    // Initial search lists all tables
+    let all = app.matching_tables();
+    assert_eq!(all.len(), 2); // 2 tables in Main Hall fixture
+
+    // Type '2' to search for Table 2
+    app.handle_key(KeyCode::Char('2'));
+    assert_eq!(app.table_input, "2");
+    let matches = app.matching_tables();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].table_number, 2);
+
+    // Press Enter to jump to Table 2
+    app.handle_key(KeyCode::Enter);
+    assert_eq!(app.focus, Focus::Tables);
+    assert_eq!(app.selected_table_index, 1); // 0-indexed: index 1 is Table 2
+    assert_eq!(app.selected_physical_table().unwrap().number, 2);
+
+    // Re-enter search and test Esc cancellation
+    app.handle_key(KeyCode::Char('g'));
+    app.handle_key(KeyCode::Char('9'));
+    assert_eq!(app.table_input, "9");
+    app.handle_key(KeyCode::Esc);
+    assert_eq!(app.focus, Focus::Tables);
+    assert!(app.table_input.is_empty());
+
+    let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn table_jump_ui_renders_search_and_details() {
+    let (mut app, database_path) = fixture();
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    // Normal mode: should render "Table Details"
+    terminal.draw(|frame| ui(frame, &app)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("Table Details"));
+    assert!(text.contains("Main Hall"));
+
+    // Jump mode: should render "Search Table"
+    app.focus = Focus::TableJump;
+    app.table_input = "2".into();
+    terminal.draw(|frame| ui(frame, &app)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("Search Table"));
+    assert!(text.contains("Search: 2|"));
+
+    let _ = fs::remove_file(database_path);
+}
+
+#[test]
+fn paid_bill_updates_payment_mode_across_bill_receipt_recent_and_db() {
+    let (mut app, database_path) = fixture();
+    let backend = TestBackend::new(100, 36);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    app.open_table_order();
+    app.add_selected_to_cart();
+    app.complete_billing("9876543210", None);
+
+    assert_eq!(app.order().status, OrderStatus::Paid);
+    assert_eq!(app.order().payment_mode, None);
+    assert_eq!(app.recent_bills[0].payment_mode, None);
+
+    // Initial paid bill rendering (without payment mode)
+    terminal.draw(|frame| ui(frame, &app)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("PAID ✔"));
+    assert!(!text.contains("PAID via"));
+
+    // Press 'p' on paid bill to update payment type
+    app.handle_key(KeyCode::Char('p'));
+    assert_eq!(app.focus, Focus::PaymentMode);
+    assert!(!app.close_on_payment);
+
+    // Press 'u' for UPI
+    app.handle_key(KeyCode::Char('u'));
+    assert_ne!(app.focus, Focus::PaymentMode);
+    assert_eq!(app.order().payment_mode, Some(PaymentMode::Upi));
+    assert_eq!(app.recent_bills[0].payment_mode, Some(PaymentMode::Upi));
+    assert!(app.recent_bills[0].receipt.contains("Payment: UPI"));
+    assert!(app.recent_bills[0].receipt.contains("Paid via"));
+
+    // Verify database record updated
+    let db = Database::open(&database_path).unwrap();
+    assert_eq!(
+        db.load_recent_bills()[0].payment_mode,
+        Some(PaymentMode::Upi)
+    );
+
+    // Draw UI and check that bill title, totals, recent bills, and table info reflect UPI
+    terminal.draw(|frame| ui(frame, &app)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("PAID via UPI ✔"));
+    assert!(text.contains("Payment Type"));
+    assert!(text.contains("UPI"));
+    assert!(text.contains("[Paid: UPI]"));
+    assert!(text.contains("[UPI]"));
+
+    // Change payment type from UPI to CASH via hotkey 'c'
+    app.handle_key(KeyCode::Char('p'));
+    assert_eq!(app.focus, Focus::PaymentMode);
+    app.handle_key(KeyCode::Char('c'));
+    assert_eq!(app.order().payment_mode, Some(PaymentMode::Cash));
+    assert_eq!(app.recent_bills[0].payment_mode, Some(PaymentMode::Cash));
+    assert!(app.recent_bills[0].receipt.contains("Payment: CASH"));
+    assert_eq!(
+        db.load_recent_bills()[0].payment_mode,
+        Some(PaymentMode::Cash)
+    );
+
+    terminal.draw(|frame| ui(frame, &app)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("PAID via CASH ✔"));
+    assert!(text.contains("CASH"));
+    assert!(text.contains("[Paid: CASH]"));
+    assert!(text.contains("[CASH]"));
+
+    // Change payment type to CARD via hotkey 'd'
+    app.handle_key(KeyCode::Char('p'));
+    assert_eq!(app.focus, Focus::PaymentMode);
+    app.handle_key(KeyCode::Char('d'));
+    assert_eq!(app.order().payment_mode, Some(PaymentMode::Card));
+    assert_eq!(app.recent_bills[0].payment_mode, Some(PaymentMode::Card));
+    assert!(app.recent_bills[0].receipt.contains("Payment: CARD"));
+    assert_eq!(
+        db.load_recent_bills()[0].payment_mode,
+        Some(PaymentMode::Card)
+    );
+
+    terminal.draw(|frame| ui(frame, &app)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("PAID via CARD ✔"));
+    assert!(text.contains("CARD"));
+    assert!(text.contains("[Paid: CARD]"));
+    assert!(text.contains("[CARD]"));
+
+    // Close order via 'c' and Enter
+    app.close_order();
+    assert_eq!(app.focus, Focus::PaymentMode);
+    assert!(app.close_on_payment);
+    app.handle_key(KeyCode::Enter);
+    assert!(app.orders.is_empty());
+    assert_eq!(app.physical_tables[0].status, TableStatus::Dirty);
+
+    // Verify recent bills still retains CARD receipt
+    assert_eq!(app.recent_bills[0].payment_mode, Some(PaymentMode::Card));
+    assert!(app.recent_bills[0].receipt.contains("Payment: CARD"));
+
     let _ = fs::remove_file(database_path);
 }

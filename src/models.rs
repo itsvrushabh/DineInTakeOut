@@ -344,6 +344,8 @@ pub struct Order {
     pub cart: Vec<CartLine>,
     pub cart_index: usize,
     pub status: OrderStatus,
+    pub customer_mobile: Option<String>,
+    pub payment_mode: Option<PaymentMode>,
 }
 
 impl Order {
@@ -384,13 +386,14 @@ impl Order {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BillSummary {
     pub id: u32,
     pub label: String,
     pub service: Service,
     pub total: f64,
     pub receipt: String,
+    pub payment_mode: Option<PaymentMode>,
 }
 
 #[cfg(test)]
@@ -414,6 +417,8 @@ mod tests {
             }],
             cart_index: 0,
             status: OrderStatus::Ordering,
+            customer_mobile: None,
+            payment_mode: None,
         }
     }
 

@@ -34,7 +34,7 @@ pub fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .title(Line::from(vec![
             Span::styled(" Floor plan ", title_style),
-            Span::styled(" (Press ? for help) ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" (? help · g jump) ", Style::default().fg(Color::DarkGray)),
         ]))
         .border_style(border_style);
 
@@ -88,19 +88,14 @@ pub fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
                 .find(|t| t.area == area_type.name && t.number == table_num);
 
             let status = table.map_or(TableStatus::Ready, |t| t.status);
-            let glyph = format!(" T{}:{:?}", table_num, status);
-
-            if status == TableStatus::Dirty {
-                if let Some(t) = table {
-                    if let Some(since) = t.dirty_since {
-                        let elapsed = (Local::now() - since).num_minutes();
-                        let remaining = CLEANING_MINUTES - elapsed;
-                        if remaining > 0 {
-                            // glyph = format!("T{}:C({}m)", table_num, remaining); // Can't reassign
-                        }
-                    }
-                }
-            }
+            let glyph = match status {
+                TableStatus::Ready => 'R',
+                TableStatus::Ordering => 'O',
+                TableStatus::Serving => 'S',
+                TableStatus::BillRequested => 'B',
+                TableStatus::Paid => 'P',
+                TableStatus::Dirty => 'C',
+            };
             let status_color = status.color();
 
             // Dirty tables count down to auto-ready.
@@ -118,8 +113,8 @@ pub fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
             let is_selected = is_focused_bar && app.selected_table_index == table_num - 1;
 
             let cell_text = match &countdown {
-                Some(mins) => format!("{glyph}{mins}"),
-                None => glyph.to_string(),
+                Some(mins) => format!("{glyph}{table_num}{mins}"),
+                None => format!("{glyph}{table_num}"),
             };
             spans.push(Span::raw(" "));
             spans.push(Span::styled(

@@ -14,8 +14,8 @@ use tokio::sync::Mutex;
 use turso::{Connection, Row, Value};
 
 use crate::models::{
-    Area, BillSummary, BillTotals, CartLine, MenuItem, Offer, Order, OrderStatus, PhysicalTable,
-    Service, TableStatus, CLEANING_MINUTES,
+    Area, BillSummary, BillTotals, CartLine, MenuItem, Offer, Order, OrderStatus, PaymentMode,
+    PhysicalTable, Service, TableStatus, CLEANING_MINUTES,
 };
 
 const TIMESTAMP_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
@@ -447,10 +447,11 @@ impl Database {
         self.rt.block_on(async {
             let mut conn = self.conn.lock().await;
             let tx = conn.transaction().await.map_err(|e| e.to_string())?;
+            let mode_str = order.payment_mode.map_or("", |m| m.label());
             tx.execute(
                 "INSERT INTO orders (id, label, service, table_number, area, customer_mobile,
-                                     subtotal, discount, ac_charge, tax, total, status)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'PAID')",
+                                     subtotal, discount, ac_charge, tax, total, payment_mode, status)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'PAID')",
                 (
                     i64::from(order.id),
                     order.label.clone(),
@@ -463,6 +464,7 @@ impl Database {
                     totals.ac_charge,
                     totals.gst,
                     totals.total,
+                    mode_str,
                 ),
             )
             .await
@@ -643,6 +645,8 @@ impl Database {
                     cart,
                     cart_index: 0,
                     status: header.status,
+                    customer_mobile: None,
+                    payment_mode: None,
                 });
             }
             orders
@@ -656,7 +660,7 @@ impl Database {
             let conn = self.conn.lock().await;
             let mut rows = conn
                 .query(
-                    "SELECT id, label, service, total FROM orders ORDER BY id DESC LIMIT 5",
+                    "SELECT id, label, service, total, payment_mode FROM orders ORDER BY id DESC LIMIT 5",
                     (),
                 )
                 .await
@@ -664,12 +668,14 @@ impl Database {
 
             let mut bills = Vec::new();
             while let Ok(Some(row)) = rows.next().await {
+                let payment_mode = PaymentMode::parse(&row_string(&row, 4));
                 bills.push(BillSummary {
                     id: row_i64(&row, 0) as u32,
                     label: row_string(&row, 1),
                     service: Service::parse(&row_string(&row, 2)).unwrap_or(Service::DineIn),
                     total: row_f64(&row, 3),
                     receipt: String::new(), // Reconstruct on demand
+                    payment_mode,
                 });
             }
             bills
@@ -913,6 +919,8 @@ mod tests {
             ],
             cart_index: 0,
             status: OrderStatus::Paid,
+            customer_mobile: None,
+            payment_mode: None,
         }
     }
 
@@ -1006,6 +1014,8 @@ mod tests {
             }],
             cart_index: 0,
             status: OrderStatus::Ordering,
+            customer_mobile: None,
+            payment_mode: None,
         };
 
         db.save_open_order(&dine_in).unwrap();

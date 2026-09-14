@@ -31,11 +31,16 @@ pub fn render_recent_bills(f: &mut Frame, app: &App, area: Rect) {
         ));
     } else {
         lines.extend(app.recent_bills.iter().enumerate().map(|(index, bill)| {
+            let mode_str = match bill.payment_mode {
+                Some(m) => format!("[{}]", m.label()),
+                None => String::new(),
+            };
             let line = format!(
-                " Bill #{:<4} {:<14} {:<10} {}",
+                " Bill #{:<4} {:<10} {:<8} {:<16} {}",
                 bill.id,
                 bill.label,
                 bill.service.label(),
+                mode_str,
                 money(bill.total)
             );
             if app.focus == Focus::RecentBills && index == app.recent_bill_index {

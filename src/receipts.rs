@@ -30,7 +30,11 @@ pub fn render_receipt(order: &Order, customer_mobile: Option<&str>, gst_number: 
         chrono::Local::now().format("%d-%m-%Y %H:%M")
     ));
     out.push_str(&format!("Mode : {}\n", order.service.label()));
-    if let Some(mobile) = customer_mobile {
+    if let Some(mode) = order.payment_mode {
+        out.push_str(&format!("Payment: {}\n", mode.display().to_uppercase()));
+    }
+    let mobile = customer_mobile.or(order.customer_mobile.as_deref());
+    if let Some(mobile) = mobile {
         out.push_str(&format!("Mobile: {mobile}\n"));
     }
     out.push_str(&"-".repeat(42));
@@ -75,6 +79,13 @@ pub fn render_receipt(order: &Order, customer_mobile: Option<&str>, gst_number: 
         ));
     }
     out.push_str(&format!("{:<22}{:>20}\n", "TOTAL", money(totals.total)));
+    if let Some(mode) = order.payment_mode {
+        out.push_str(&format!(
+            "{:<22}{:>20}\n",
+            "Paid via",
+            mode.display().to_uppercase()
+        ));
+    }
     out.push_str(&"-".repeat(42));
     out.push('\n');
     out.push_str(&center("Thank you! Visit again!", 42));

@@ -68,3 +68,12 @@ and clamped to `0`–`100`; `GSTNumber` is stored verbatim.
 - The database remains the source of truth at runtime — CSV is just the
   import/export transport.
 - Receipts under `bills/` are unaffected by configuration import/export.
+
+---
+
+## Related Documentation
+
+- [User Guide](USER_GUIDE.md) — Step-by-step operating instructions.
+- [Developer Guide](DEVELOPER_GUIDE.md) — Codebase architecture and development guidelines.
+- [Database Reference](DATABASE.md) — Embedded Turso SQLite schemas and query specifications.
+- [Keybindings](KEYBINDINGS.md) — Comprehensive keyboard shortcut reference.

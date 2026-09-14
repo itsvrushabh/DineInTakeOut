@@ -73,13 +73,19 @@ pub fn render_mobile_entry(f: &mut Frame, app: &App) {
 
 pub fn render_payment_mode(f: &mut Frame, app: &App) {
     let modes = PaymentMode::all();
-    let area = centered_rect(48, (modes.len() as u16) + 7, f.area());
+    let area = centered_rect(52, (modes.len() as u16) + 7, f.area());
     f.render_widget(Clear, area);
+
+    let title_text = if app.close_on_payment {
+        " Settle & Close Order "
+    } else {
+        " Update Payment Type "
+    };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .title(Span::styled(
-            " Mode of payment ",
+            title_text,
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
@@ -87,12 +93,23 @@ pub fn render_payment_mode(f: &mut Frame, app: &App) {
         .border_style(Style::default().fg(Color::Cyan));
 
     let header = match app.orders.get(app.active_order) {
-        Some(order) => format!(
-            "Close {} · Bill #{} — {}",
-            order.label,
-            order.id,
-            money(order.totals().total)
-        ),
+        Some(order) => {
+            if app.close_on_payment {
+                format!(
+                    "Close {} · Bill #{} — {}",
+                    order.label,
+                    order.id,
+                    money(order.totals().total)
+                )
+            } else {
+                format!(
+                    "Bill #{} ({}) — {} · Paid",
+                    order.id,
+                    order.label,
+                    money(order.totals().total)
+                )
+            }
+        }
         None => String::from("No order selected"),
     };
     let mut lines = vec![Line::styled(
@@ -104,7 +121,14 @@ pub fn render_payment_mode(f: &mut Frame, app: &App) {
     for (idx, mode) in modes.iter().enumerate() {
         let selected = idx == app.payment_mode_index;
         let marker = if selected { "▸ " } else { "  " };
-        let line_text = format!("{marker}{}. {:<16}", idx + 1, mode.display());
+        let shortcut = match mode {
+            PaymentMode::Cash => "[1 / c]",
+            PaymentMode::Upi => "[2 / u]",
+            PaymentMode::Card => "[3 / d]",
+            PaymentMode::PersonCredit => "[4]",
+            PaymentMode::HaveItOnHotel => "[5]",
+        };
+        let line_text = format!("{marker}{:<8} {:<18}", shortcut, mode.display());
         lines.push(Line::from(Span::styled(
             line_text,
             if selected {
@@ -117,8 +141,13 @@ pub fn render_payment_mode(f: &mut Frame, app: &App) {
             },
         )));
     }
+    let footer_text = if app.close_on_payment {
+        "↑↓/1–5/c,u,d: select · Enter: close · Esc: cancel"
+    } else {
+        "↑↓/1–5/c,u,d: select · Enter: update bill · Esc: cancel"
+    };
     lines.push(Line::styled(
-        "↑↓/1–5: select · Enter: confirm & close · Esc: cancel",
+        footer_text,
         Style::default().fg(Color::DarkGray),
     ));
 
@@ -222,6 +251,7 @@ pub fn render_help(f: &mut Frame, _app: &App) {
     let text = vec![
         Line::from("--- Floor Plan ---"),
         Line::from("↑↓: area · ←→: table · 1-9: jump to area"),
+        Line::from("g: search / jump to any table"),
         Line::from("Enter: open/switch/clean order"),
         Line::from("s: next order stage · t: take-out"),
         Line::from("c: cancel/close order · r: mark ready"),

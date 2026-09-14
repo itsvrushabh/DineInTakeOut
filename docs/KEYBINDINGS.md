@@ -7,15 +7,16 @@
 | `←` / `→` or `h` / `l` | Select a table in the active area |
 | `[` / `]` | Cycle left / right through all open orders (dine-in and take-out) |
 | `1`–`9` | Jump to a table area |
+| `g` | Search / jump to any table (by number, area, or status) |
 | `/` | Focus menu search |
 | `Enter` | Add menu item; open or switch table order; pay from cart |
 | `=` / `+` | Increase selected cart-item quantity |
 | `-` | Decrease selected cart-item quantity; removes it at quantity one |
 | `x` / `Delete` | Remove selected cart item |
-| `p` (or `b` in Tables) | Generate and save the active bill |
+| `p` (or `b` in Tables) | Generate active bill; or update payment type (UPI, Cash, Card) if already paid |
 | `t` | Open take-out order |
 | `s` | Advance the active order: Taking order → Serving → Ready for bill |
-| `c` | Clear an unpaid cart in Menu, or close a paid order in Tables (asks the mode of payment first) |
+| `c` | Clear an unpaid cart in Menu, or settle/close a paid order in Tables (prompts mode of payment) |
 | `r` | Mark the selected cleaning table as ready |
 | `e` / `i` | Export / import the **full config** (menu, areas, offers, GSTIN, AC rate) as CSV while in Menu |
 | `q` / `Esc` | Quit (`Esc` also exits search and the billing popups) |
@@ -69,14 +70,27 @@ are typed directly (5 + 5 display), `Backspace` deletes, `Esc` cancels billing,
 and `Enter` generates the bill once all 10 digits are entered. The number is
 printed on the receipt and stored with the paid order in the database.
 
-## Closing & mode of payment
+## Updating payment type & closing orders
 
-Pressing `c` on a paid order opens the **mode of payment** popup: `↑↓`,
-`j/k`, or the number keys `1–5` choose between Cash, UPI, Card, Person
-credit, and Have it on hotel. The order's label, bill number, and total are
-shown for confirmation. `Enter` records the mode against the stored bill and
-closes the order; `Esc` cancels closing.
+- Pressing `p` (or `b`) on an already-paid bill opens the **Update Payment Type** popup to set or change how the customer paid (`UPI`, `Cash`, `Card`, etc.). This immediately updates the bill title, totals breakdown (`Payment Type: UPI`), printed receipt, recent bills list (`[UPI]`), and SQLite database.
+- Pressing `c` on a paid order opens the **Settle & Close Order** popup.
+- In the payment modal, navigate with `↑`/`↓` or use quick shortcuts:
+  - `1` or `c`: **Cash**
+  - `2` or `u`: **UPI**
+  - `3` or `d`: **Card**
+  - `4`: **Person credit**
+  - `5`: **Have it on hotel**
+- Press `Enter` to confirm, or `Esc` to cancel.
 
 ## Recent bills
 
 From the Tables panel, press `Tab` to focus **Recent bills**. Use `↑` / `↓` to select one and view its saved receipt in the bill panel. Previous bills cannot be edited.
+
+---
+
+## Related Documentation
+
+- [User Guide](USER_GUIDE.md) — Comprehensive user and cashier guide.
+- [Developer Guide](DEVELOPER_GUIDE.md) — Internal architecture and extension guide.
+- [Database Reference](DATABASE.md) — Schema definitions and SQL queries.
+- [Configuration via CSV](CONFIGURATION.md) — CSV format specification for menus, areas, and offers.

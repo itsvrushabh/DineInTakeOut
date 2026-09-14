@@ -44,12 +44,22 @@ pub fn render_bill(f: &mut Frame, app: &App, area: Rect) {
     let serving = matches!(order.status, OrderStatus::Serving);
     let bill_ready = matches!(order.status, OrderStatus::BillRequested);
     let title = if paid {
-        format!(
-            " Bill #{} — PAID ✔ ({} / {}) ",
-            order.id,
-            order.label,
-            order.service.label()
-        )
+        if let Some(mode) = order.payment_mode {
+            format!(
+                " Bill #{} — PAID via {} ✔ ({} / {}) ",
+                order.id,
+                mode.display().to_uppercase(),
+                order.label,
+                order.service.label()
+            )
+        } else {
+            format!(
+                " Bill #{} — PAID ✔ ({} / {}) ",
+                order.id,
+                order.label,
+                order.service.label()
+            )
+        }
     } else if bill_ready {
         format!(
             " Bill #{} — READY FOR BILL ⏳ ({} / {}) ",
@@ -131,6 +141,18 @@ pub fn render_bill(f: &mut Frame, app: &App, area: Rect) {
         format!(" {:<16}{:>14}", "TOTAL", money(totals.total)),
         Style::default().add_modifier(Modifier::BOLD),
     )));
+    if let Some(mode) = order.payment_mode {
+        total_lines.push(Line::from(Span::styled(
+            format!(
+                " {:<16}{:>14}",
+                "Payment Type",
+                mode.display().to_uppercase()
+            ),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
 
     let totals_height = total_lines.len() as u16;
 

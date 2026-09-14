@@ -46,10 +46,31 @@ pub struct App {
     pub database: Option<Database>, // None only when the DB could not be opened
     pub mobile_buffer: String,      // customer mobile captured in the billing prompt
     pub payment_mode_index: usize,  // selection inside the payment-mode popup
+    pub close_on_payment: bool,     // true if payment modal closes order, false if updating bill
     pub offer_index: usize,         // selection inside the offer-selection popup
     pub pending_mobile: String,     // customer mobile captured before offer pick
     pub show_help: bool,
     pub table_input: String,
+    pub table_search_index: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableSearchResult {
+    pub area_index: usize,
+    pub area_name: String,
+    pub table_number: usize,
+    pub is_ac: bool,
+    pub status: TableStatus,
+    pub dirty_since: Option<chrono::DateTime<Local>>,
+    pub order_id: Option<u32>,
+    pub order_label: Option<String>,
+    pub order_total: Option<f64>,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl App {
@@ -178,10 +199,12 @@ impl App {
             database,
             mobile_buffer: String::new(),
             payment_mode_index: 0,
+            close_on_payment: false,
             offer_index: 0,
             pending_mobile: String::new(),
             show_help: false,
             table_input: String::new(),
+            table_search_index: 0,
         }
     }
     pub fn order_mut(&mut self) -> &mut Order {
@@ -196,6 +219,155 @@ impl App {
         self.selected_area()
             .map(|a| a.name.clone())
             .unwrap_or_default()
+    }
+
+    pub fn selected_physical_table(&self) -> Option<&PhysicalTable> {
+        let area = self.selected_area_name();
+        let number = self.selected_table_index + 1;
+        self.physical_tables
+            .iter()
+            .find(|t| t.area == area && t.number == number)
+    }
+
+    pub fn selected_table_order(&self) -> Option<&Order> {
+        let area = self.selected_area_name();
+        let number = self.selected_table_index + 1;
+        self.orders.iter().find(|o| {
+            o.service == Service::DineIn
+                && o.area.as_deref() == Some(&area)
+                && o.table_number == Some(number)
+        })
+    }
+
+    pub fn matching_tables(&self) -> Vec<TableSearchResult> {
+        let mut all = Vec::new();
+        for (a_idx, area) in self.areas.iter().enumerate() {
+            for num in 1..=area.table_count {
+                let pt = self
+                    .physical_tables
+                    .iter()
+                    .find(|t| t.area == area.name && t.number == num);
+                let status = pt.map_or(TableStatus::Ready, |t| t.status);
+                let dirty_since = pt.and_then(|t| t.dirty_since);
+                let order = self.orders.iter().find(|o| {
+                    o.service == Service::DineIn
+                        && o.area.as_deref() == Some(&area.name)
+                        && o.table_number == Some(num)
+                });
+                all.push(TableSearchResult {
+                    area_index: a_idx,
+                    area_name: area.name.clone(),
+                    table_number: num,
+                    is_ac: area.is_ac,
+                    status,
+                    dirty_since,
+                    order_id: order.map(|o| o.id),
+                    order_label: order.map(|o| o.label.clone()),
+                    order_total: order.map(|o| o.totals().total),
+                });
+            }
+        }
+
+        let query = self.table_input.trim().to_lowercase();
+        if query.is_empty() {
+            let current_area = self.selected_area_index;
+            all.sort_by_key(|t| (t.area_index != current_area, t.area_index, t.table_number));
+            return all;
+        }
+
+        let parsed_num: Option<usize> = if let Some(stripped) = query.strip_prefix('t') {
+            stripped.trim().parse().ok()
+        } else {
+            query.parse().ok()
+        };
+
+        let mut scored: Vec<(i64, TableSearchResult)> = Vec::new();
+        for item in all {
+            let mut score = 0i64;
+            let area_lower = item.area_name.to_lowercase();
+            let status_title = item.status.title().to_lowercase();
+            let status_label = item.status.label().to_lowercase();
+
+            if let Some(num) = parsed_num {
+                if item.table_number == num {
+                    score += 100;
+                    if item.area_index == self.selected_area_index {
+                        score += 50;
+                    }
+                }
+            }
+
+            let tokens: Vec<&str> = query.split_whitespace().collect();
+            if tokens.len() >= 2 {
+                let mut matches_tokens = true;
+                for tok in &tokens {
+                    if let Ok(num) = tok.parse::<usize>() {
+                        if item.table_number != num {
+                            matches_tokens = false;
+                        }
+                    } else if !area_lower.contains(tok) && !status_title.contains(tok) {
+                        matches_tokens = false;
+                    }
+                }
+                if matches_tokens {
+                    score += 80;
+                }
+            }
+
+            if query.len() >= 2 {
+                let (first, rest) = query.split_at(1);
+                if let Ok(num) = rest.parse::<usize>() {
+                    if item.table_number == num && area_lower.starts_with(first) {
+                        score += 90;
+                    }
+                }
+                if query.len() >= 3 {
+                    let (prefix, rest) = query.split_at(2);
+                    if let Ok(num) = rest.parse::<usize>() {
+                        if item.table_number == num && area_lower.starts_with(prefix) {
+                            score += 95;
+                        }
+                    }
+                }
+            }
+
+            if area_lower.contains(&query) {
+                score += 40;
+            }
+
+            if status_title.contains(&query) || status_label.contains(&query) {
+                score += 35;
+            }
+
+            if let Some(ref label) = item.order_label {
+                if label.to_lowercase().contains(&query) {
+                    score += 60;
+                }
+            }
+
+            let haystack = format!(
+                "{} T{} {} {}",
+                item.area_name,
+                item.table_number,
+                item.status.title(),
+                item.status.label()
+            );
+            if let Some(fuzzy_score) = self.matcher.fuzzy_match(&haystack, &query) {
+                score += fuzzy_score;
+            }
+
+            if score > 0 {
+                scored.push((score, item));
+            }
+        }
+
+        scored.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then_with(|| a.1.area_index.cmp(&b.1.area_index))
+                .then_with(|| a.1.table_number.cmp(&b.1.table_number))
+        });
+
+        scored.into_iter().map(|(_, item)| item).collect()
     }
 
     pub fn persist_table(&self, area: &str, number: usize) {
@@ -337,6 +509,8 @@ impl App {
                 cart: Vec::new(),
                 cart_index: 0,
                 status: OrderStatus::Ordering,
+                customer_mobile: None,
+                payment_mode: None,
             };
 
             self.orders.push(order);
@@ -374,6 +548,8 @@ impl App {
             cart: Vec::new(),
             cart_index: 0,
             status: OrderStatus::Ordering,
+            customer_mobile: None,
+            payment_mode: None,
         };
 
         self.orders.push(order);
@@ -420,7 +596,11 @@ impl App {
 
         let order = self.order();
         if order.status == OrderStatus::Paid {
-            self.payment_mode_index = 0;
+            self.payment_mode_index = order
+                .payment_mode
+                .and_then(|m| PaymentMode::all().iter().position(|&x| x == m))
+                .unwrap_or(0);
+            self.close_on_payment = true;
             self.focus_return = self.focus;
             self.focus = Focus::PaymentMode;
         } else if order.cart.is_empty() {
@@ -431,10 +611,51 @@ impl App {
             ));
         }
     }
+
+    pub fn update_paid_order_payment_mode(&mut self, mode: PaymentMode) {
+        if self.orders.is_empty() || self.order().status != OrderStatus::Paid {
+            return;
+        }
+        let order_id = self.order().id;
+        self.order_mut().payment_mode = Some(mode);
+
+        if let Some(db) = &self.database {
+            if let Err(error) = db.update_payment_mode(order_id, mode.label()) {
+                self.notify(format!("Could not save payment mode: {error}"));
+            }
+        }
+
+        let gst_number = self.gst_number.clone();
+        let order = self.order();
+        let updated_receipt = render_receipt(order, order.customer_mobile.as_deref(), &gst_number);
+
+        if let Some(summary) = self.recent_bills.iter_mut().find(|b| b.id == order_id) {
+            summary.payment_mode = Some(mode);
+            summary.receipt = updated_receipt;
+        }
+
+        self.notify(format!(
+            "Bill #{} updated with payment type {}.",
+            order_id,
+            mode.display()
+        ));
+    }
+
+    pub fn select_payment_mode(&mut self, mode: PaymentMode) {
+        if self.close_on_payment {
+            self.perform_close_with_mode(mode);
+        } else {
+            self.update_paid_order_payment_mode(mode);
+            self.focus = self.focus_return;
+        }
+    }
+
     pub fn perform_close_with_mode(&mut self, mode: PaymentMode) {
         if self.orders.is_empty() || self.order().status != OrderStatus::Paid {
             return;
         }
+
+        self.update_paid_order_payment_mode(mode);
 
         let order = self.order();
         let label = order.label.clone();
@@ -442,12 +663,6 @@ impl App {
             .table_number
             .and_then(|num| order.area.as_ref().map(|area| (num, area.clone())));
         let closed_id = order.id;
-
-        if let Some(db) = &self.database {
-            if let Err(error) = db.update_payment_mode(closed_id, mode.label()) {
-                self.notify(format!("Could not save payment mode: {error}"));
-            }
-        }
         let mode_display = mode.display();
 
         self.orders.remove(self.active_order);
@@ -639,8 +854,16 @@ impl App {
         }
 
         if self.order().status == OrderStatus::Paid {
+            self.payment_mode_index = self
+                .order()
+                .payment_mode
+                .and_then(|m| PaymentMode::all().iter().position(|&x| x == m))
+                .unwrap_or(0);
+            self.close_on_payment = false;
+            self.focus_return = self.focus;
+            self.focus = Focus::PaymentMode;
             self.notify(format!(
-                "Bill #{} has already been generated.",
+                "Select payment type for Bill #{} (1/c: Cash, 2/u: UPI, 3/d: Card)",
                 self.order().id
             ));
             return;
@@ -680,6 +903,7 @@ impl App {
         } else {
             Some(mobile.trim())
         };
+        self.order_mut().customer_mobile = customer_mobile.map(String::from);
         let gst_number = self.gst_number.clone();
         let (order_id, order_label, order_service, table_info, totals, bill_text) = {
             let order = self.order();
@@ -714,6 +938,7 @@ impl App {
             service: order_service,
             total: totals.total,
             receipt: bill_text.clone(),
+            payment_mode: self.order().payment_mode,
         };
         self.recent_bills.insert(0, summary);
         self.recent_bills.truncate(5);
@@ -738,7 +963,11 @@ impl App {
     pub fn handle_key(&mut self, key: KeyCode) -> bool {
         let in_protected = matches!(
             self.focus,
-            Focus::Search | Focus::MobileEntry | Focus::PaymentMode | Focus::OfferSelect
+            Focus::Search
+                | Focus::MobileEntry
+                | Focus::PaymentMode
+                | Focus::OfferSelect
+                | Focus::TableJump
         );
         if matches!(key, KeyCode::Char('q')) && !in_protected {
             return true;
@@ -747,12 +976,15 @@ impl App {
             return true;
         }
 
-        if matches!(key, KeyCode::Char('?')) {
+        if matches!(key, KeyCode::Char('?'))
+            && self.focus != Focus::Search
+            && self.focus != Focus::TableJump
+        {
             self.show_help = !self.show_help;
             return false;
         }
 
-        if self.focus != Focus::Search {
+        if self.focus != Focus::Search && self.focus != Focus::TableJump {
             if matches!(key, KeyCode::Char(']')) {
                 if !self.orders.is_empty() {
                     self.active_order = (self.active_order + 1) % self.orders.len();
@@ -806,6 +1038,11 @@ impl App {
                 KeyCode::Char('p') => self.begin_billing(),
                 KeyCode::Char('e') => self.export_config(),
                 KeyCode::Char('i') => self.import_config(),
+                KeyCode::Char('g') => {
+                    self.focus = Focus::TableJump;
+                    self.table_input.clear();
+                    self.table_search_index = 0;
+                }
                 _ => {}
             },
             Focus::Cart => match key {
@@ -827,6 +1064,11 @@ impl App {
                 KeyCode::Char('-') => self.adjust_selected_line_quantity(-1),
                 KeyCode::Delete | KeyCode::Char('x') => self.remove_selected_line(),
                 KeyCode::Char('c') => self.clear_active_cart(),
+                KeyCode::Char('g') => {
+                    self.focus = Focus::TableJump;
+                    self.table_input.clear();
+                    self.table_search_index = 0;
+                }
                 KeyCode::Enter | KeyCode::Char('p') => self.begin_billing(),
                 KeyCode::Tab => {
                     self.focus = Focus::Tables;
@@ -879,7 +1121,11 @@ impl App {
                 KeyCode::Char('r') => {
                     self.clean_selected_table();
                 }
-                KeyCode::Char('g') => self.focus = Focus::TableJump,
+                KeyCode::Char('g') => {
+                    self.focus = Focus::TableJump;
+                    self.table_input.clear();
+                    self.table_search_index = 0;
+                }
                 KeyCode::Char('b') | KeyCode::Char('p') => self.begin_billing(),
                 KeyCode::BackTab => self.focus = Focus::Cart,
                 KeyCode::Tab => self.focus = Focus::RecentBills,
@@ -948,12 +1194,21 @@ impl App {
                 }
                 KeyCode::Char(d @ '1'..='5') => {
                     if let Some(mode) = PaymentMode::all().get((d as u8 - b'1') as usize) {
-                        self.perform_close_with_mode(*mode);
+                        self.select_payment_mode(*mode);
                     }
+                }
+                KeyCode::Char('c') | KeyCode::Char('C') => {
+                    self.select_payment_mode(PaymentMode::Cash);
+                }
+                KeyCode::Char('u') | KeyCode::Char('U') => {
+                    self.select_payment_mode(PaymentMode::Upi);
+                }
+                KeyCode::Char('d') | KeyCode::Char('D') => {
+                    self.select_payment_mode(PaymentMode::Card);
                 }
                 KeyCode::Enter => {
                     if let Some(mode) = PaymentMode::all().get(self.payment_mode_index) {
-                        self.perform_close_with_mode(*mode);
+                        self.select_payment_mode(*mode);
                     }
                 }
                 KeyCode::Esc => {
@@ -988,22 +1243,55 @@ impl App {
                 }
             }
             Focus::TableJump => match key {
-                KeyCode::Char(c) if c.is_ascii_digit() => {
+                KeyCode::Char(c) => {
                     self.table_input.push(c);
+                    self.table_search_index = 0;
                 }
                 KeyCode::Backspace => {
                     self.table_input.pop();
+                    self.table_search_index = 0;
+                }
+                KeyCode::Up | KeyCode::BackTab => {
+                    self.table_search_index = self.table_search_index.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Tab => {
+                    let n = self.matching_tables().len();
+                    if self.table_search_index + 1 < n {
+                        self.table_search_index += 1;
+                    }
                 }
                 KeyCode::Enter => {
-                    if let Ok(id) = self.table_input.parse::<usize>() {
-                        // Find table by ID and update selected
-                        self.notify(format!("Jumped to table {id}"));
+                    let matches = self.matching_tables();
+                    if !matches.is_empty() {
+                        let idx = self.table_search_index.min(matches.len() - 1);
+                        let target = &matches[idx];
+                        self.selected_area_index = target.area_index;
+                        self.selected_table_index = target.table_number.saturating_sub(1);
+                        if let Some(order_id) = target.order_id {
+                            if let Some(order_idx) =
+                                self.orders.iter().position(|o| o.id == order_id)
+                            {
+                                self.active_order = order_idx;
+                            }
+                        }
+                        self.notify(format!(
+                            "Jumped to {} Table {} ({}).",
+                            target.area_name,
+                            target.table_number,
+                            target.status.title()
+                        ));
                         self.table_input.clear();
+                        self.table_search_index = 0;
+                        self.focus = Focus::Tables;
+                    } else if !self.table_input.is_empty() {
+                        self.notify(format!("No tables match '{}'.", self.table_input));
+                    } else {
+                        self.focus = Focus::Tables;
                     }
-                    self.focus = Focus::Tables;
                 }
                 KeyCode::Esc => {
                     self.table_input.clear();
+                    self.table_search_index = 0;
                     self.focus = Focus::Tables;
                 }
                 _ => {}

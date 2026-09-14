@@ -1,4 +1,4 @@
-# Architecture
+# Architecture & System Design
 
 The application is structured into decoupled domain, persistence, configuration, state management, and UI rendering modules.
 
@@ -9,37 +9,60 @@ Turso SQLite DB ──────────> db.rs ──> app.rs ──> ui/
                                        │
                                        ├── open dine-in / take-out orders
                                        ├── table lifecycle & cart operations
-                                       └── receipt generation
+                                       ├── table search / jump lookup
+                                       └── receipt & payment mode management
                                                 │
 bills/bill_*.txt <── saved receipt / optional CUPS print ── receipts.rs
 ```
 
-## Modules
+---
 
-- `src/models.rs`: Core domain types (`MenuItem`, `CartLine`, `Service`, `PaymentMode`, `Focus`, `OrderStatus`, `TableStatus`, `Area`, `PhysicalTable`, `Offer`, `BillTotals`, `Order`, `BillSummary`) and price breakdown calculation. No terminal or file-system dependencies.
-- `src/config.rs`: Default menu dataset and spreadsheet-friendly CSV I/O for `menu.csv`, `areas.csv`, `offers.csv`, and `config.csv`.
-- `src/receipts.rs`: Plaintext receipt rendering, `bills/` file storage, optional CUPS printing, and recent bill summary parsing.
-- `src/db.rs`: Embedded Turso database engine (`data/billing.db`): menu catalogue, physical table status, unpaid open orders and cart lines (for session restoration across restarts), paid order history, areas, settings, and offers.
-- `src/app.rs`: Application state (`App`), lifecycle transitions, cart actions, fuzzy search filtering, modal flows, and keyboard input routing.
-- `src/ui/`: Modular Ratatui rendering components:
-  - `ui/mod.rs`: Root layout and area distribution.
+## Modules & Component Boundaries
+
+- **`src/models.rs`**: Core domain types (`MenuItem`, `CartLine`, `Service`, `PaymentMode`, `Focus`, `OrderStatus`, `TableStatus`, `Area`, `PhysicalTable`, `Offer`, `BillTotals`, `Order`, `BillSummary`) and price breakdown calculation. Completely free of terminal and file-system dependencies.
+- **`src/config.rs`**: Default menu dataset and spreadsheet-friendly CSV I/O for `menu.csv`, `areas.csv`, `offers.csv`, and `config.csv`.
+- **`src/receipts.rs`**: Plaintext 42-column receipt rendering, `bills/` file storage, optional CUPS printing, and recent bill summary parsing.
+- **`src/db.rs`**: Embedded Turso database engine (`data/billing.db`): menu catalogue, physical table status, unpaid open orders and cart lines (for session restoration across restarts), paid order history, areas, settings, and offers.
+- **`src/app.rs`**: Application state (`App`), lifecycle transitions, cart actions, table search/jump filtering, payment mode updates, modal flows, and keyboard input routing.
+- **`src/ui/`**: Modular Ratatui rendering components:
+  - `ui/mod.rs`: Root layout and area distribution with adaptive compact height support.
   - `ui/floor_plan.rs`: Floor plan area bars, table cards, take-out chips, and lifecycle legend.
+  - `ui/table_info.rs`: Active table details (status, order ID, bill total, payment mode badge) and interactive table search/jump input (`g`).
   - `ui/search.rs`: Fuzzy search input box and match counters.
   - `ui/menu.rs`: Menu table with category, unit, and price columns.
-  - `ui/bill.rs`: Cart lines table and non-overlapping totals breakdown.
+  - `ui/bill.rs`: Cart lines table, paid title banner, and non-overlapping totals breakdown.
   - `ui/notifications.rs`: Status banner (adapts to compact and standard terminal sizes).
-  - `ui/recent_bills.rs`: Recent bill history panel.
+  - `ui/recent_bills.rs`: Recent bill history panel with payment mode tags.
   - `ui/modals.rs`: Customer mobile capture, payment mode confirmation, and discount offer selection dialogs.
   - `ui/footer.rs`: Contextual keyboard shortcut reference.
-- `src/main.rs`: Minimal entry point: terminal initialization/restoration and event polling loop.
+- **`src/main.rs`**: Minimal entry point: terminal initialization/restoration, raw mode setup, and event polling loop.
 
-## Lifecycle
+---
 
-1. Open a table order or a take-out order (table → *Taking order*).
-2. Add menu items and adjust quantities while the order is unpaid; `s` moves it through *Serving* and *Ready for bill*.
-3. Generate the receipt (`p`): a prompt captures the customer's 10-digit mobile number (or press `Enter` on an empty prompt to skip). If any discount offers exist, a popup first picks an offer (or none) to apply. The order — with its line items, mobile number, applied discount, and the AC/GST breakdown — is saved to the paid-history table, its open-order copy is removed, the receipt (with the configured GSTIN) is printed if CUPS is available, and the table shows *Bill paid*.
-4. Close the paid order (`c`): a popup confirms the mode of payment (Cash, UPI, Card, Person credit, Have it on hotel), records it against the stored bill, and sends the table to *Cleaning*; it returns to *Ready* automatically after ~10 minutes or immediately with `r`.
+## Operational Data Flow & Lifecycle
 
-Configuration (areas, menu items, GSTIN, discount offers, AC surcharge rate) is managed through CSV import/export rather than an in-app editor. Press `e` in the Menu panel to export the full config bundle (`menu.csv`, `areas.csv`, `offers.csv`, `config.csv`) next to `menu.csv`; press `i` to import and apply the same four files. Import validates each file, persists everything to the embedded database, and rebuilds the in-memory table map. See `docs/CONFIGURATION.md` for the exact file formats.
+1. **Table Initiation**: Open a table order (`Enter`) or take-out order (`t`). Dine-in tables enter *Taking order*.
+2. **Ordering**: Add menu items and adjust quantities while the order is unpaid. Use `s` to advance through *Serving* and *Ready for bill*.
+3. **Table Jump (`g`)**: Instantly search across all tables in all areas by number, name, or status, jumping focus directly to the target order.
+4. **Billing (`p` / `b`)**:
+   - Captures the customer's 10-digit mobile number (optional, press `Enter` on empty to skip).
+   - Prompts for an applicable discount offer if offers exist.
+   - Saves the bill with item lines, tax, and discount breakdown to the database.
+   - Generates the text receipt in `bills/` and prints via CUPS if configured.
+   - Status changes to *Bill paid*.
+5. **Payment Type Updates (`p` / `b`)**:
+   - If the guest pays via UPI, Cash, or Card after billing, pressing `p` or `b` opens the payment modal.
+   - Selecting a payment type immediately updates the active bill, totals breakdown (`Payment Type: UPI`), recent bills list (`[UPI]`), table details (`[Paid: UPI]`), and SQLite database.
+6. **Settlement & Cleaning (`c`)**:
+   - Confirms the final payment mode, archives the order, and transitions the table to *Cleaning*.
+   - A 10-minute auto-ready countdown begins, turning *Ready* automatically, or immediately with `r`.
 
-Recent receipts are loaded from the five newest files in `bills/` at startup. Legacy root-level `bill_*.txt` receipts are also read for compatibility. They are deliberately read-only.
+---
+
+## Related Documentation
+
+- [User Guide](USER_GUIDE.md) — Operational walkthrough for cashiers and managers.
+- [Developer Guide](DEVELOPER_GUIDE.md) — Deep technical documentation and extension guide.
+- [Database Reference](DATABASE.md) — Turso SQLite schema, tables, and query reference.
+- [Keyboard Reference](KEYBINDINGS.md) — Full hotkey list and quick shortcuts.
+- [Configuration via CSV](CONFIGURATION.md) — CSV format specification for menus, areas, and offers.
