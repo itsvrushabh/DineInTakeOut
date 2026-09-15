@@ -219,15 +219,7 @@ impl App {
             if let Some(db) = &self.database {
                 let _ = db.delete_open_order(source_order.id);
             }
-            if let Some(pt) = self
-                .physical_tables
-                .iter_mut()
-                .find(|t| t.area == source_area && t.number == source_number)
-            {
-                pt.status = TableStatus::Ready;
-                pt.order_id = None;
-                self.persist_table(&source_area, source_number);
-            }
+            self.transition_table_status(&source_area, source_number, TableStatus::Ready);
             if let Some(target_order) = self.orders.iter().find(|o| o.id == target_order_id) {
                 if let Some(db) = &self.database {
                     let _ = db.save_open_order(target_order);
@@ -260,15 +252,7 @@ impl App {
                 source_order.ac_rate = 0.0;
             }
 
-            if let Some(pt) = self
-                .physical_tables
-                .iter_mut()
-                .find(|t| t.area == source_area && t.number == source_number)
-            {
-                pt.status = TableStatus::Ready;
-                pt.order_id = None;
-                self.persist_table(&source_area, source_number);
-            }
+            self.transition_table_status(&source_area, source_number, TableStatus::Ready);
             if let Some(pt) = self
                 .physical_tables
                 .iter_mut()
@@ -285,5 +269,55 @@ impl App {
             ));
         }
         self.focus = Focus::Tables;
+    }
+
+    /// Centralized state machine transition for physical tables.
+    /// Updates physical table status, resets cleaning timestamps / order references,
+    /// and persists state to the database transactionally.
+    pub fn transition_table_status(
+        &mut self,
+        area: &str,
+        table_num: usize,
+        new_status: TableStatus,
+    ) {
+        if let Some(pt) = self
+            .physical_tables
+            .iter_mut()
+            .find(|t| t.area == area && t.number == table_num)
+        {
+            pt.status = new_status;
+            match new_status {
+                TableStatus::Dirty => {
+                    pt.order_id = None;
+                    pt.dirty_since = Some(chrono::Local::now());
+                }
+                TableStatus::Ready => {
+                    pt.order_id = None;
+                    pt.dirty_since = None;
+                }
+                _ => {}
+            }
+        }
+        self.persist_table(area, table_num);
+    }
+
+    pub fn find_physical_table(
+        &self,
+        area: &str,
+        table_num: usize,
+    ) -> Option<&crate::models::PhysicalTable> {
+        self.physical_tables
+            .iter()
+            .find(|t| t.area == area && t.number == table_num)
+    }
+
+    pub fn find_physical_table_mut(
+        &mut self,
+        area: &str,
+        table_num: usize,
+    ) -> Option<&mut crate::models::PhysicalTable> {
+        self.physical_tables
+            .iter_mut()
+            .find(|t| t.area == area && t.number == table_num)
     }
 }

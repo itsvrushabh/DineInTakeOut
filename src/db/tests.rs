@@ -86,8 +86,7 @@ fn paid_orders_persist_with_items_and_drive_bill_numbers() {
     );
     // AC-room bill includes the surcharge and GST.
     assert!(
-        (db.scalar_f64("SELECT total FROM orders WHERE id = 8") - 55.0 * 1.06 * 1.05).abs()
-            < 1e-9
+        (db.scalar_f64("SELECT total FROM orders WHERE id = 8") - 55.0 * 1.06 * 1.05).abs() < 1e-9
     );
     assert_eq!(
         db.scalar_i64("SELECT COUNT(*) FROM order_items WHERE order_id = 7"),

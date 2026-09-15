@@ -88,6 +88,59 @@ pub struct App {
     pub kds_index: usize,
     pub sales_analytics: Option<SalesAnalytics>,
     pub printer_config: PrinterConfig,
+    pub pending_effects: std::collections::VecDeque<AppEffect>,
+}
+
+/// Commands and I/O effects emitted by App business logic to be executed
+/// asynchronously or in background tasks without stalling the UI rendering thread.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AppEffect {
+    PrintReceipt { printer: String, data: Vec<u8> },
+    PrintKot { printer: String, data: Vec<u8> },
+    SaveFile { path: PathBuf, content: String },
+    TriggerBackup,
+}
+
+/// Discrete modal dialog state machine encapsulating ephemeral buffers and popup invariants.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ModalState {
+    None,
+    MobileEntry {
+        buffer: String,
+    },
+    PaymentMode {
+        index: usize,
+        close_on_payment: bool,
+    },
+    OfferSelect {
+        index: usize,
+    },
+    TableJump {
+        query: String,
+        index: usize,
+    },
+    TableMove {
+        target_index: usize,
+    },
+    ItemNote {
+        buffer: String,
+    },
+    BillSearch {
+        query: String,
+        index: usize,
+    },
+    DailyReport,
+    SplitPayment {
+        cash: String,
+        upi: String,
+        card: String,
+        field: usize,
+    },
+    KitchenDisplay {
+        index: usize,
+    },
+    SalesAnalytics,
+    Help,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -435,6 +488,7 @@ impl App {
             kds_index: 0,
             sales_analytics: None,
             printer_config,
+            pending_effects: std::collections::VecDeque::new(),
         }
     }
 
@@ -533,22 +587,9 @@ impl App {
 
     pub fn clean_selected_table(&mut self) {
         let area = self.selected_area_name();
-        let mut target = None;
-        if let Some(t) = self
-            .physical_tables
-            .iter_mut()
-            .find(|t| t.area == area && t.number == self.selected_table_index + 1)
-        {
-            t.status = TableStatus::Ready;
-            t.dirty_since = None;
-            t.order_id = None;
-            target = Some((t.area.clone(), t.number));
-        }
-
-        if let Some((area, table_num)) = target {
-            self.persist_table(&area, table_num);
-            self.notify(format!("Table {table_num} cleaned and ready."));
-        }
+        let table_num = self.selected_table_index + 1;
+        self.transition_table_status(&area, table_num, TableStatus::Ready);
+        self.notify(format!("Table {table_num} cleaned and ready."));
     }
 
     pub fn notify(&mut self, msg: impl Into<String>) {
@@ -559,6 +600,74 @@ impl App {
     pub fn tick_notification(&mut self) {
         self.notifications
             .retain(|(_, until)| Local::now() < *until);
+    }
+
+    /// Push an I/O effect or asynchronous command to be dispatched.
+    pub fn queue_effect(&mut self, effect: AppEffect) {
+        self.pending_effects.push_back(effect);
+    }
+
+    /// Drain all pending I/O effects and return them for processing.
+    pub fn drain_effects(&mut self) -> Vec<AppEffect> {
+        self.pending_effects.drain(..).collect()
+    }
+
+    /// Returns the currently active modal state according to focus and flags.
+    pub fn active_modal(&self) -> ModalState {
+        if self.show_help {
+            return ModalState::Help;
+        }
+        match self.focus {
+            Focus::MobileEntry => ModalState::MobileEntry {
+                buffer: self.mobile_buffer.clone(),
+            },
+            Focus::PaymentMode => ModalState::PaymentMode {
+                index: self.payment_mode_index,
+                close_on_payment: self.close_on_payment,
+            },
+            Focus::OfferSelect => ModalState::OfferSelect {
+                index: self.offer_index,
+            },
+            Focus::TableJump => ModalState::TableJump {
+                query: self.table_input.clone(),
+                index: self.table_search_index,
+            },
+            Focus::TableMove => ModalState::TableMove {
+                target_index: self.table_move_target_index,
+            },
+            Focus::ItemNote => ModalState::ItemNote {
+                buffer: self.item_note_buffer.clone(),
+            },
+            Focus::BillSearch => ModalState::BillSearch {
+                query: self.bill_search_query.clone(),
+                index: self.bill_search_index,
+            },
+            Focus::DailyReport => ModalState::DailyReport,
+            Focus::SplitPayment => ModalState::SplitPayment {
+                cash: self.split_cash.clone(),
+                upi: self.split_upi.clone(),
+                card: self.split_card.clone(),
+                field: self.split_field,
+            },
+            Focus::KitchenDisplay => ModalState::KitchenDisplay {
+                index: self.kds_index,
+            },
+            Focus::Analytics => ModalState::SalesAnalytics,
+            _ => ModalState::None,
+        }
+    }
+
+    /// Resets all ephemeral modal buffers and returns focus to the main panel.
+    pub fn close_active_modal(&mut self) {
+        self.show_help = false;
+        self.mobile_buffer.clear();
+        self.item_note_buffer.clear();
+        self.table_input.clear();
+        self.split_cash.clear();
+        self.split_upi.clear();
+        self.split_card.clear();
+        self.split_field = 0;
+        self.focus = self.focus_return;
     }
 
     /// Switch focus directly to a specific box by its 1-indexed number.

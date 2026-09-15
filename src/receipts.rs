@@ -10,6 +10,179 @@ pub fn money(value: f64) -> String {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReceiptItem {
+    pub name: String,
+    pub tag: &'static str,
+    pub qty: u32,
+    pub line_total: f64,
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReceiptDocument {
+    pub restaurant_name: String,
+    pub address: String,
+    pub contact: String,
+    pub gst_number: String,
+    pub bill_id: u32,
+    pub table_label: String,
+    pub service_label: &'static str,
+    pub payment_mode: Option<crate::models::PaymentMode>,
+    pub customer_mobile: Option<String>,
+    pub items: Vec<ReceiptItem>,
+    pub totals: crate::models::BillTotals,
+    pub timestamp_str: String,
+}
+
+impl ReceiptDocument {
+    pub fn from_order(
+        order: &Order,
+        customer_mobile: Option<&str>,
+        gst_number: &str,
+        restaurant_name: &str,
+        address: &str,
+        contact: &str,
+    ) -> Self {
+        let r_name = if restaurant_name.trim().is_empty() {
+            "SHREE KRISHNA RESTAURANT".to_string()
+        } else {
+            restaurant_name.trim().to_string()
+        };
+
+        let items = order
+            .cart
+            .iter()
+            .map(|line| {
+                let tag = if line.is_complimentary {
+                    " [NC]"
+                } else if line.discount_percent > 0.0 {
+                    " [DISC]"
+                } else {
+                    ""
+                };
+                ReceiptItem {
+                    name: line.name.clone(),
+                    tag,
+                    qty: line.qty,
+                    line_total: line.total(),
+                    note: line.note.clone(),
+                }
+            })
+            .collect();
+
+        Self {
+            restaurant_name: r_name,
+            address: address.trim().to_string(),
+            contact: contact.trim().to_string(),
+            gst_number: gst_number.trim().to_string(),
+            bill_id: order.id,
+            table_label: order.label.clone(),
+            service_label: order.service.label(),
+            payment_mode: order.payment_mode,
+            customer_mobile: customer_mobile
+                .map(|s| s.to_string())
+                .or_else(|| order.customer_mobile.clone()),
+            items,
+            totals: order.totals(),
+            timestamp_str: chrono::Local::now().format("%d-%m-%Y %H:%M").to_string(),
+        }
+    }
+
+    pub fn render_ascii(&self) -> String {
+        let mut out = String::new();
+        out.push_str(&center(&self.restaurant_name, 42));
+        out.push('\n');
+        if !self.address.is_empty() {
+            out.push_str(&center(&self.address, 42));
+            out.push('\n');
+        }
+        if !self.contact.is_empty() {
+            out.push_str(&center(&format!("Contact: {}", self.contact), 42));
+            out.push('\n');
+        }
+        if !self.gst_number.is_empty() {
+            out.push_str(&center(&format!("GST: {}", self.gst_number), 42));
+            out.push('\n');
+        }
+        out.push_str(&"-".repeat(42));
+        out.push('\n');
+        out.push_str(&format!(
+            "Bill #{:<6} Table: {}\n",
+            self.bill_id, self.table_label
+        ));
+        out.push_str(&format!("{}\n", self.timestamp_str));
+        out.push_str(&format!("Mode : {}\n", self.service_label));
+        if let Some(mode) = self.payment_mode {
+            out.push_str(&format!("Payment: {}\n", mode.display().to_uppercase()));
+        }
+        if let Some(ref mobile) = self.customer_mobile {
+            out.push_str(&format!("Mobile: {mobile}\n"));
+        }
+        out.push_str(&"-".repeat(42));
+        out.push('\n');
+
+        for item in &self.items {
+            let display_name = format!("{}{}", item.name, item.tag);
+            out.push_str(&format!(
+                "{:<22}{:>4} × {:<10}\n",
+                display_name,
+                item.qty,
+                money(item.line_total)
+            ));
+            if let Some(ref note) = item.note {
+                out.push_str(&format!("  ↳ {}\n", note));
+            }
+        }
+
+        out.push_str(&"-".repeat(42));
+        out.push('\n');
+        out.push_str(&format!(
+            "{:<22}{:>20}\n",
+            "Subtotal",
+            money(self.totals.subtotal)
+        ));
+        if self.totals.discount > 0.0 {
+            out.push_str(&format!(
+                "{:<22}{:>20}\n",
+                "Discount",
+                money(-self.totals.discount)
+            ));
+        }
+        if self.totals.ac_charge > 0.0 {
+            out.push_str(&format!(
+                "{:<22}{:>20}\n",
+                "AC Surcharge",
+                money(self.totals.ac_charge)
+            ));
+        }
+        if self.totals.gst > 0.0 {
+            out.push_str(&format!(
+                "{:<22}{:>20}\n",
+                format!("GST ({:.1}%)", self.totals.gst_rate * 100.0),
+                money(self.totals.gst)
+            ));
+        }
+        out.push_str(&format!(
+            "{:<22}{:>20}\n",
+            "TOTAL",
+            money(self.totals.total)
+        ));
+        if let Some(mode) = self.payment_mode {
+            out.push_str(&format!(
+                "{:<22}{:>20}\n",
+                "Paid via",
+                mode.display().to_uppercase()
+            ));
+        }
+        out.push_str(&"-".repeat(42));
+        out.push('\n');
+        out.push_str(&center("Thank you! Visit again!", 42));
+        out.push_str("\n\n");
+        out
+    }
+}
+
 pub fn render_receipt(
     order: &Order,
     customer_mobile: Option<&str>,
@@ -18,106 +191,109 @@ pub fn render_receipt(
     address: &str,
     contact: &str,
 ) -> String {
-    let mut out = String::new();
-    let r_name = if restaurant_name.trim().is_empty() {
-        "SHREE KRISHNA RESTAURANT"
-    } else {
-        restaurant_name.trim()
-    };
-    out.push_str(&center(r_name, 42));
-    out.push('\n');
-    if !address.trim().is_empty() {
-        out.push_str(&center(address.trim(), 42));
-        out.push('\n');
-    }
-    if !contact.trim().is_empty() {
-        out.push_str(&center(&format!("Contact: {}", contact.trim()), 42));
-        out.push('\n');
-    }
-    if !gst_number.trim().is_empty() {
-        out.push_str(&center(&format!("GST: {}", gst_number.trim()), 42));
-        out.push('\n');
-    }
-    out.push_str(&"-".repeat(42));
-    out.push('\n');
-    out.push_str(&format!("Bill #{:<6} Table: {}\n", order.id, order.label));
-    out.push_str(&format!(
-        "{}\n",
-        chrono::Local::now().format("%d-%m-%Y %H:%M")
-    ));
-    out.push_str(&format!("Mode : {}\n", order.service.label()));
-    if let Some(mode) = order.payment_mode {
-        out.push_str(&format!("Payment: {}\n", mode.display().to_uppercase()));
-    }
-    let mobile = customer_mobile.or(order.customer_mobile.as_deref());
-    if let Some(mobile) = mobile {
-        out.push_str(&format!("Mobile: {mobile}\n"));
-    }
-    out.push_str(&"-".repeat(42));
-    out.push('\n');
+    ReceiptDocument::from_order(
+        order,
+        customer_mobile,
+        gst_number,
+        restaurant_name,
+        address,
+        contact,
+    )
+    .render_ascii()
+}
 
-    for line in &order.cart {
-        let tag = if line.is_complimentary {
-            " [NC]"
-        } else if line.discount_percent > 0.0 {
-            " [DISC]"
+#[derive(Clone, Debug, PartialEq)]
+pub struct KotItem {
+    pub name: String,
+    pub qty: u32,
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct KotDocument {
+    pub restaurant_name: String,
+    pub order_id: u32,
+    pub table_label: String,
+    pub area_name: Option<String>,
+    pub is_reprint: bool,
+    pub is_delta: bool,
+    pub items: Vec<KotItem>,
+    pub timestamp_str: String,
+}
+
+impl KotDocument {
+    pub fn from_order_items(
+        order: &Order,
+        items: &[crate::models::CartLine],
+        is_reprint: bool,
+        is_delta: bool,
+        restaurant_name: &str,
+    ) -> Self {
+        let r_name = if restaurant_name.trim().is_empty() {
+            "SHREE KRISHNA RESTAURANT".to_string()
         } else {
-            ""
+            restaurant_name.trim().to_string()
         };
-        let display_name = format!("{}{}", line.name, tag);
-        out.push_str(&format!(
-            "{:<22}{:>4} × {:<10}\n",
-            display_name,
-            line.qty,
-            money(line.total())
-        ));
-        if let Some(note) = &line.note {
-            out.push_str(&format!("  ↳ {}\n", note));
+
+        let kot_items = items
+            .iter()
+            .map(|l| KotItem {
+                name: l.name.clone(),
+                qty: l.qty,
+                note: l.note.clone(),
+            })
+            .collect();
+
+        Self {
+            restaurant_name: r_name,
+            order_id: order.id,
+            table_label: order.label.clone(),
+            area_name: order.area.clone(),
+            is_reprint,
+            is_delta,
+            items: kot_items,
+            timestamp_str: chrono::Local::now().format("%d-%m-%Y %H:%M:%S").to_string(),
         }
     }
 
-    let totals = order.totals();
-    out.push_str(&"-".repeat(42));
-    out.push('\n');
-    out.push_str(&format!(
-        "{:<22}{:>20}\n",
-        "Subtotal",
-        money(totals.subtotal)
-    ));
-    if totals.discount > 0.0 {
-        out.push_str(&format!(
-            "{:<22}{:>20}\n",
-            "Discount",
-            money(-totals.discount)
-        ));
+    pub fn render_ascii(&self) -> String {
+        let mut out = String::new();
+        out.push_str(&center(&self.restaurant_name, 42));
+        out.push('\n');
+        let title = if self.is_reprint {
+            "*** KITCHEN ORDER TICKET [REPRINT] ***"
+        } else if self.is_delta {
+            "*** KITCHEN ORDER TICKET (ADD-ON / DELTA) ***"
+        } else {
+            "*** KITCHEN ORDER TICKET (KOT) ***"
+        };
+        out.push_str(&center(title, 42));
+        out.push('\n');
+        out.push_str(&"-".repeat(42));
+        out.push('\n');
+        out.push_str(&format!("Table / Order: {}\n", self.table_label));
+        if let Some(ref area) = self.area_name {
+            out.push_str(&format!("Area         : {}\n", area));
+        }
+        out.push_str(&format!("Order ID     : #{}\n", self.order_id));
+        out.push_str(&format!("Time         : {}\n", self.timestamp_str));
+        out.push_str(&"-".repeat(42));
+        out.push('\n');
+        out.push_str(&format!("{:<32}{:>10}\n", "ITEM", "QTY"));
+        out.push_str(&"-".repeat(42));
+        out.push('\n');
+        for line in &self.items {
+            out.push_str(&format!("{:<32}{:>10}\n", line.name, line.qty));
+            if let Some(ref note) = line.note {
+                out.push_str(&format!("  ↳ {}\n", note));
+            }
+        }
+        out.push_str(&"-".repeat(42));
+        out.push('\n');
+        out.push_str(&center("Send to Kitchen", 42));
+        out.push_str("\n\n");
+        out
     }
-    if totals.ac_charge > 0.0 {
-        out.push_str(&format!(
-            "{:<22}{:>20}\n",
-            "AC Surcharge",
-            money(totals.ac_charge)
-        ));
-    }
-    if totals.gst > 0.0 {
-        out.push_str(&format!(
-            "{:<22}{:>20}\n",
-            format!("GST ({:.1}%)", totals.gst_rate * 100.0),
-            money(totals.gst)
-        ));
-    }
-    out.push_str(&format!("{:<22}{:>20}\n", "TOTAL", money(totals.total)));
-    if let Some(mode) = order.payment_mode {
-        out.push_str(&format!(
-            "{:<22}{:>20}\n",
-            "Paid via",
-            mode.display().to_uppercase()
-        ));
-    }
-    out.push_str(&"-".repeat(42));
-    out.push('\n');
-    out.push_str(&center("Thank you! Visit again!", 42));
-    out.push_str("\n\n");
-    out
 }
 
 pub fn render_kot(order: &Order, is_reprint: bool, restaurant_name: &str) -> String {
@@ -131,50 +307,8 @@ pub fn render_kot_items(
     is_delta: bool,
     restaurant_name: &str,
 ) -> String {
-    let mut out = String::new();
-    let r_name = if restaurant_name.trim().is_empty() {
-        "SHREE KRISHNA RESTAURANT"
-    } else {
-        restaurant_name.trim()
-    };
-    out.push_str(&center(r_name, 42));
-    out.push('\n');
-    let title = if is_reprint {
-        "*** KITCHEN ORDER TICKET [REPRINT] ***"
-    } else if is_delta {
-        "*** KITCHEN ORDER TICKET (ADD-ON / DELTA) ***"
-    } else {
-        "*** KITCHEN ORDER TICKET (KOT) ***"
-    };
-    out.push_str(&center(title, 42));
-    out.push('\n');
-    out.push_str(&"-".repeat(42));
-    out.push('\n');
-    out.push_str(&format!("Table / Order: {}\n", order.label));
-    if let Some(area) = &order.area {
-        out.push_str(&format!("Area         : {}\n", area));
-    }
-    out.push_str(&format!("Order ID     : #{}\n", order.id));
-    out.push_str(&format!(
-        "Time         : {}\n",
-        chrono::Local::now().format("%d-%m-%Y %H:%M:%S")
-    ));
-    out.push_str(&"-".repeat(42));
-    out.push('\n');
-    out.push_str(&format!("{:<32}{:>10}\n", "ITEM", "QTY"));
-    out.push_str(&"-".repeat(42));
-    out.push('\n');
-    for line in items {
-        out.push_str(&format!("{:<32}{:>10}\n", line.name, line.qty));
-        if let Some(note) = &line.note {
-            out.push_str(&format!("  ↳ {}\n", note));
-        }
-    }
-    out.push_str(&"-".repeat(42));
-    out.push('\n');
-    out.push_str(&center("Send to Kitchen", 42));
-    out.push_str("\n\n");
-    out
+    KotDocument::from_order_items(order, items, is_reprint, is_delta, restaurant_name)
+        .render_ascii()
 }
 
 pub fn render_z_report(
@@ -409,7 +543,9 @@ mod tests {
         let uri = "upi://pay?pa=test@upi&pn=Rest&am=100.00&cu=INR";
         let blocks = generate_upi_qr_blocks(uri).unwrap();
         assert!(!blocks.is_empty());
-        assert!(blocks.iter().any(|line| line.contains('█') || line.contains('▀') || line.contains('▄')));
+        assert!(blocks
+            .iter()
+            .any(|line| line.contains('█') || line.contains('▀') || line.contains('▄')));
     }
 
     #[test]
@@ -491,13 +627,11 @@ mod tests {
             is_ac: false,
             ac_rate: 0.0,
             discount_percent: 0.0,
-            cart: vec![
-                {
-                    let mut line = CartLine::new("Masala Dosa", 90.0, 2);
-                    line.note = Some("Crispy".into());
-                    line
-                },
-            ],
+            cart: vec![{
+                let mut line = CartLine::new("Masala Dosa", 90.0, 2);
+                line.note = Some("Crispy".into());
+                line
+            }],
             cart_index: 0,
             status: OrderStatus::Ordering,
             customer_mobile: None,

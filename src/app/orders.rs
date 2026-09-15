@@ -131,15 +131,7 @@ impl App {
         }
 
         if let Some((table_num, area)) = table_info {
-            if let Some(pt) = self
-                .physical_tables
-                .iter_mut()
-                .find(|t| t.area == area && t.number == table_num)
-            {
-                pt.status = TableStatus::Ready;
-                pt.order_id = None;
-            }
-            self.persist_table(&area, table_num);
+            self.transition_table_status(&area, table_num, TableStatus::Ready);
         }
         self.notify(format!("Order #{} cancelled.", closed_id));
     }
@@ -224,14 +216,7 @@ impl App {
                 let label = self.order().label.clone();
 
                 if let (Some(table_num), Some(area)) = (table_number, area) {
-                    if let Some(pt) = self
-                        .physical_tables
-                        .iter_mut()
-                        .find(|t| t.area == area && t.number == table_num)
-                    {
-                        pt.status = next.table_status();
-                    }
-                    self.persist_table(&area, table_num);
+                    self.transition_table_status(&area, table_num, next.table_status());
                 }
                 self.persist_active_order();
                 let stage = match next {

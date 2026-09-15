@@ -120,30 +120,34 @@ pub fn build_escpos_receipt(
         buf.extend_from_slice(ESC_DRAWER_KICK);
     }
 
+    let doc = crate::receipts::ReceiptDocument::from_order(
+        order,
+        customer_mobile,
+        gst_number,
+        restaurant_name,
+        address,
+        contact,
+    );
+
     // Header (Centered, Double Size)
     buf.extend_from_slice(ESC_ALIGN_CENTER);
     buf.extend_from_slice(ESC_DOUBLE_SIZE);
     buf.extend_from_slice(ESC_BOLD_ON);
-    let r_name = if restaurant_name.trim().is_empty() {
-        "SHREE KRISHNA RESTAURANT"
-    } else {
-        restaurant_name.trim()
-    };
-    buf.extend_from_slice(r_name.as_bytes());
+    buf.extend_from_slice(doc.restaurant_name.as_bytes());
     buf.push(b'\n');
 
     // Sub-header (Normal size)
     buf.extend_from_slice(ESC_NORMAL_SIZE);
     buf.extend_from_slice(ESC_BOLD_OFF);
-    if !address.trim().is_empty() {
-        buf.extend_from_slice(address.trim().as_bytes());
+    if !doc.address.is_empty() {
+        buf.extend_from_slice(doc.address.as_bytes());
         buf.push(b'\n');
     }
-    if !contact.trim().is_empty() {
-        buf.extend_from_slice(format!("Contact: {}\n", contact.trim()).as_bytes());
+    if !doc.contact.is_empty() {
+        buf.extend_from_slice(format!("Contact: {}\n", doc.contact).as_bytes());
     }
-    if !gst_number.trim().is_empty() {
-        buf.extend_from_slice(format!("GSTIN: {}\n", gst_number.trim()).as_bytes());
+    if !doc.gst_number.is_empty() {
+        buf.extend_from_slice(format!("GSTIN: {}\n", doc.gst_number).as_bytes());
     }
 
     // Invoice Metadata (Left Aligned)
@@ -152,9 +156,7 @@ pub fn build_escpos_receipt(
     buf.extend_from_slice(
         format!(
             "Bill #{:<6} Table: {:<14} {}\n",
-            order.id,
-            order.label,
-            order.service.label()
+            doc.bill_id, doc.table_label, doc.service_label
         )
         .as_bytes(),
     );
@@ -165,7 +167,7 @@ pub fn build_escpos_receipt(
         )
         .as_bytes(),
     );
-    if let Some(mobile) = customer_mobile.or(order.customer_mobile.as_deref()) {
+    if let Some(ref mobile) = doc.customer_mobile {
         buf.extend_from_slice(format!("Customer: {}\n", mobile).as_bytes());
     }
     buf.extend_from_slice(b"------------------------------------------\n");
@@ -173,27 +175,20 @@ pub fn build_escpos_receipt(
     // Item List
     buf.extend_from_slice(b"ITEM                       QTY       TOTAL\n");
     buf.extend_from_slice(b"------------------------------------------\n");
-    for line in &order.cart {
-        let tag = if line.is_complimentary {
-            " [NC]"
-        } else if line.discount_percent > 0.0 {
-            " [DISC]"
-        } else {
-            ""
-        };
-        let item_title = format!("{}{}", line.name, tag);
-        let total_str = format!("Rs.{:.2}", line.total());
+    for item in &doc.items {
+        let item_title = format!("{}{}", item.name, item.tag);
+        let total_str = format!("Rs.{:.2}", item.line_total);
         buf.extend_from_slice(
-            format!("{:<26}{:>4}{:>12}\n", item_title, line.qty, total_str).as_bytes(),
+            format!("{:<26}{:>4}{:>12}\n", item_title, item.qty, total_str).as_bytes(),
         );
-        if let Some(note) = &line.note {
+        if let Some(ref note) = item.note {
             buf.extend_from_slice(format!("  >> {}\n", note).as_bytes());
         }
     }
     buf.extend_from_slice(b"------------------------------------------\n");
 
     // Totals Breakdown
-    let totals = order.totals();
+    let totals = doc.totals;
     buf.extend_from_slice(format!("{:<26}{:>16.2}\n", "Subtotal", totals.subtotal).as_bytes());
     if totals.discount > 0.0 {
         buf.extend_from_slice(format!("{:<26}{:>16.2}\n", "Discount", -totals.discount).as_bytes());
@@ -217,7 +212,7 @@ pub fn build_escpos_receipt(
     // Grand Total (Bold)
     buf.extend_from_slice(ESC_BOLD_ON);
     buf.extend_from_slice(format!("{:<26}{:>16.2}\n", "GRAND TOTAL", totals.total).as_bytes());
-    if let Some(mode) = order.payment_mode {
+    if let Some(mode) = doc.payment_mode {
         buf.extend_from_slice(format!("{:<26}{:>16}\n", "Settled Via", mode.display()).as_bytes());
     }
     buf.extend_from_slice(ESC_BOLD_OFF);
@@ -239,23 +234,26 @@ pub fn build_escpos_kot(
     is_delta: bool,
     restaurant_name: &str,
 ) -> Vec<u8> {
+    let doc = crate::receipts::KotDocument::from_order_items(
+        order,
+        items_to_print,
+        is_reprint,
+        is_delta,
+        restaurant_name,
+    );
+
     let mut buf = Vec::new();
     buf.extend_from_slice(ESC_INIT);
 
     // KOT Header
     buf.extend_from_slice(ESC_ALIGN_CENTER);
     buf.extend_from_slice(ESC_BOLD_ON);
-    let r_name = if restaurant_name.trim().is_empty() {
-        "SHREE KRISHNA RESTAURANT"
-    } else {
-        restaurant_name.trim()
-    };
-    buf.extend_from_slice(format!("{}\n", r_name).as_bytes());
+    buf.extend_from_slice(format!("{}\n", doc.restaurant_name).as_bytes());
 
     buf.extend_from_slice(ESC_DOUBLE_SIZE);
-    let title = if is_reprint {
+    let title = if doc.is_reprint {
         "*** KOT [REPRINT] ***"
-    } else if is_delta {
+    } else if doc.is_delta {
         "*** KOT [ADD-ON / DELTA] ***"
     } else {
         "*** KOT (KITCHEN ORDER) ***"
@@ -267,8 +265,10 @@ pub fn build_escpos_kot(
     buf.extend_from_slice(b"------------------------------------------\n");
     buf.extend_from_slice(ESC_ALIGN_LEFT);
     buf.extend_from_slice(ESC_BOLD_ON);
-    buf.extend_from_slice(format!("TABLE: {:<14} ORDER #{}\n", order.label, order.id).as_bytes());
-    if let Some(area) = &order.area {
+    buf.extend_from_slice(
+        format!("TABLE: {:<14} ORDER #{}\n", doc.table_label, doc.order_id).as_bytes(),
+    );
+    if let Some(ref area) = doc.area_name {
         buf.extend_from_slice(format!("AREA : {}\n", area).as_bytes());
     }
     buf.extend_from_slice(ESC_BOLD_OFF);
@@ -284,11 +284,11 @@ pub fn build_escpos_kot(
     // Items list (with emphasis on quantity and notes)
     buf.extend_from_slice(b"QTY    DISH NAME & CUSTOMIZATION\n");
     buf.extend_from_slice(b"------------------------------------------\n");
-    for line in items_to_print {
+    for line in &doc.items {
         buf.extend_from_slice(ESC_BOLD_ON);
         buf.extend_from_slice(format!("{:>3} x  {}\n", line.qty, line.name).as_bytes());
         buf.extend_from_slice(ESC_BOLD_OFF);
-        if let Some(note) = &line.note {
+        if let Some(ref note) = line.note {
             buf.extend_from_slice(format!("       >> NOTE: {}\n", note).as_bytes());
         }
     }
@@ -455,7 +455,9 @@ mod tests {
 
         let bytes_default = build_escpos_receipt(&order, "", "", "", "", None, false);
         assert!(!bytes_default.is_empty());
-        assert!(bytes_default.windows(ESC_CUT_PAPER.len()).any(|w| w == ESC_CUT_PAPER));
+        assert!(bytes_default
+            .windows(ESC_CUT_PAPER.len())
+            .any(|w| w == ESC_CUT_PAPER));
 
         let bytes = build_escpos_receipt(
             &order,
@@ -478,7 +480,9 @@ mod tests {
         assert!(str_rep.contains("[DISC]"));
         assert!(str_rep.contains("GRAND TOTAL"));
         assert!(str_rep.contains("Settled Via"));
-        assert!(bytes.windows(ESC_DRAWER_KICK.len()).any(|w| w == ESC_DRAWER_KICK));
+        assert!(bytes
+            .windows(ESC_DRAWER_KICK.len())
+            .any(|w| w == ESC_DRAWER_KICK));
     }
 
     #[test]
@@ -554,4 +558,3 @@ mod tests {
         assert!(send_bytes(&bad_addr_cfg, None, b"FAIL").is_err());
     }
 }
-

@@ -19,6 +19,14 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
         if cleaned > 0 {
             app.notify(format!("{cleaned} table(s) cleaned and back to Ready."));
         }
+        for effect in app.drain_effects() {
+            if let dinein_takeout_billing::app::AppEffect::SaveFile { path, content } = effect {
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::write(&path, content);
+            }
+        }
         terminal.draw(|f| ui(f, &app))?;
 
         // Poll so the 10-minute banner can expire even without keypresses.

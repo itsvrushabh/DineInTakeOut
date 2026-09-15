@@ -100,6 +100,14 @@ impl App {
             Some(&self.printer_config.kot_printer),
             &escpos,
         );
+        self.queue_effect(crate::app::AppEffect::PrintKot {
+            printer: self.printer_config.kot_printer.clone(),
+            data: escpos.clone(),
+        });
+        self.queue_effect(crate::app::AppEffect::SaveFile {
+            path: std::path::PathBuf::from(format!("receipts/kot_{order_id}_{kot_id}.txt")),
+            content: kot_text.clone(),
+        });
 
         let order_mut = self.order_mut();
         order_mut.kot_sent_count += 1;

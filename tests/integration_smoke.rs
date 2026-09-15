@@ -101,6 +101,7 @@ fn fixture() -> (App, PathBuf) {
         kds_index: 0,
         sales_analytics: None,
         printer_config: dinein_takeout_billing::printer::PrinterConfig::default(),
+        pending_effects: std::collections::VecDeque::new(),
     };
     (app, database_path)
 }
@@ -1453,17 +1454,15 @@ fn comprehensive_ui_views_and_modals_render() {
     // 9. Bill Search Modal
     app.focus = Focus::BillSearch;
     app.bill_search_query = "9876".into();
-    app.bill_search_results = vec![
-        dinein_takeout_billing::models::HistoricalBill {
-            id: 1,
-            label: "T-1".into(),
-            service: dinein_takeout_billing::models::Service::DineIn,
-            customer_mobile: "9876543210".into(),
-            total: 350.0,
-            payment_mode: Some(PaymentMode::Cash),
-            created_at: "2026-09-14 12:00".into(),
-        }
-    ];
+    app.bill_search_results = vec![dinein_takeout_billing::models::HistoricalBill {
+        id: 1,
+        label: "T-1".into(),
+        service: dinein_takeout_billing::models::Service::DineIn,
+        customer_mobile: "9876543210".into(),
+        total: 350.0,
+        payment_mode: Some(PaymentMode::Cash),
+        created_at: "2026-09-14 12:00".into(),
+    }];
     app.bill_search_index = 0;
     terminal.draw(|f| ui(f, &app)).unwrap();
 
@@ -1511,51 +1510,93 @@ fn comprehensive_ui_views_and_modals_render() {
     terminal.draw(|f| ui(f, &app)).unwrap();
 
     // 16. Tall search bar (height >= 3)
-    let tall_area = ratatui::layout::Rect { x: 0, y: 0, width: 60, height: 4 };
-    terminal.draw(|f| dinein_takeout_billing::ui::search::render_search(f, &app, tall_area)).unwrap();
+    let tall_area = ratatui::layout::Rect {
+        x: 0,
+        y: 0,
+        width: 60,
+        height: 4,
+    };
+    terminal
+        .draw(|f| dinein_takeout_billing::ui::search::render_search(f, &app, tall_area))
+        .unwrap();
     app.search.clear();
     app.focus = Focus::Menu;
-    terminal.draw(|f| dinein_takeout_billing::ui::search::render_search(f, &app, tall_area)).unwrap();
+    terminal
+        .draw(|f| dinein_takeout_billing::ui::search::render_search(f, &app, tall_area))
+        .unwrap();
 
     // 17. Bill rendering with various order statuses & cart items
-    let bill_area = ratatui::layout::Rect { x: 0, y: 0, width: 60, height: 25 };
+    let bill_area = ratatui::layout::Rect {
+        x: 0,
+        y: 0,
+        width: 60,
+        height: 25,
+    };
     app.focus = Focus::Cart;
     app.order_mut().status = OrderStatus::Serving;
-    terminal.draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area)).unwrap();
+    terminal
+        .draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area))
+        .unwrap();
 
     app.order_mut().status = OrderStatus::BillRequested;
-    terminal.draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area)).unwrap();
+    terminal
+        .draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area))
+        .unwrap();
 
     app.order_mut().status = OrderStatus::Paid;
     app.order_mut().payment_mode = None;
-    terminal.draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area)).unwrap();
+    terminal
+        .draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area))
+        .unwrap();
 
     app.order_mut().payment_mode = Some(PaymentMode::Upi);
     app.order_mut().cart[0].kot_sent_qty = 1; // partial KOT
-    terminal.draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area)).unwrap();
+    terminal
+        .draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area))
+        .unwrap();
 
     app.order_mut().cart[0].kot_sent_qty = 2; // full KOT
-    terminal.draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area)).unwrap();
+    terminal
+        .draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area))
+        .unwrap();
 
     // Bill in recent bills mode
     app.focus = Focus::RecentBills;
     app.recent_tab = RecentTab::Bills;
-    terminal.draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area)).unwrap();
+    terminal
+        .draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area))
+        .unwrap();
     app.recent_tab = RecentTab::Kots;
-    terminal.draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area)).unwrap();
+    terminal
+        .draw(|f| dinein_takeout_billing::ui::bill::render_bill(f, &app, bill_area))
+        .unwrap();
 
     // 18. Table details with Dirty and Paid states
-    let table_area = ratatui::layout::Rect { x: 0, y: 0, width: 34, height: 8 };
+    let table_area = ratatui::layout::Rect {
+        x: 0,
+        y: 0,
+        width: 34,
+        height: 8,
+    };
     app.focus = Focus::Tables;
     app.physical_tables[0].status = TableStatus::Dirty;
     app.physical_tables[0].dirty_since = Some(chrono::Local::now() - chrono::Duration::minutes(3));
-    terminal.draw(|f| dinein_takeout_billing::ui::table_info::render_table_info(f, &app, table_area)).unwrap();
+    terminal
+        .draw(|f| dinein_takeout_billing::ui::table_info::render_table_info(f, &app, table_area))
+        .unwrap();
 
     app.physical_tables[0].status = TableStatus::Paid;
-    terminal.draw(|f| dinein_takeout_billing::ui::table_info::render_table_info(f, &app, table_area)).unwrap();
+    terminal
+        .draw(|f| dinein_takeout_billing::ui::table_info::render_table_info(f, &app, table_area))
+        .unwrap();
 
     // 19. All Footers
-    let footer_area = ratatui::layout::Rect { x: 0, y: 0, width: 140, height: 1 };
+    let footer_area = ratatui::layout::Rect {
+        x: 0,
+        y: 0,
+        width: 140,
+        height: 1,
+    };
     for focus in [
         Focus::Menu,
         Focus::Cart,
@@ -1576,7 +1617,9 @@ fn comprehensive_ui_views_and_modals_render() {
         Focus::TableJump,
     ] {
         app.focus = focus;
-        terminal.draw(|f| dinein_takeout_billing::ui::footer::render_footer(f, &app, footer_area)).unwrap();
+        terminal
+            .draw(|f| dinein_takeout_billing::ui::footer::render_footer(f, &app, footer_area))
+            .unwrap();
     }
 
     let _ = fs::remove_file(database_path);
@@ -2089,7 +2132,11 @@ fn pos_ultimate_edge_cases_and_100_percent_coverage() {
 
     // 10. Focus::OfferSelect key handling
     app.focus = Focus::OfferSelect;
-    app.offers.push(Offer { id: 1, name: "Special 10".into(), discount_percent: 10.0 });
+    app.offers.push(Offer {
+        id: 1,
+        name: "Special 10".into(),
+        discount_percent: 10.0,
+    });
     app.handle_key(KeyCode::Char('1'));
     app.focus = Focus::OfferSelect;
     app.handle_key(KeyCode::Enter);
@@ -2131,7 +2178,7 @@ fn pos_ultimate_edge_cases_and_100_percent_coverage() {
     // 16. Focus::SplitPayment
     app.focus = Focus::SplitPayment;
     app.handle_key(KeyCode::Char('A')); // autofill
-    app.handle_key(KeyCode::Enter);     // confirm
+    app.handle_key(KeyCode::Enter); // confirm
 
     // 17. Focus::Analytics
     app.open_sales_analytics();
@@ -2149,14 +2196,16 @@ fn pos_ultimate_edge_cases_and_100_percent_coverage() {
     // 19. UI Search view render
     let backend = ratatui::backend::TestBackend::new(80, 24);
     let mut terminal = ratatui::Terminal::new(backend).unwrap();
-    terminal.draw(|f| {
-        let area = f.area();
-        app.search = "tea".into();
-        app.focus = Focus::Search;
-        dinein_takeout_billing::ui::search::render_search(f, &app, area);
-        let compact = ratatui::layout::Rect::new(0, 0, 80, 1);
-        dinein_takeout_billing::ui::search::render_search(f, &app, compact);
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            let area = f.area();
+            app.search = "tea".into();
+            app.focus = Focus::Search;
+            dinein_takeout_billing::ui::search::render_search(f, &app, area);
+            let compact = ratatui::layout::Rect::new(0, 0, 80, 1);
+            dinein_takeout_billing::ui::search::render_search(f, &app, compact);
+        })
+        .unwrap();
 
     // 20. Config import/export with empty directory
     let temp_dir = std::env::temp_dir().join(format!("test_import_export_{}", std::process::id()));

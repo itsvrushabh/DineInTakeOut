@@ -1,10 +1,6 @@
-use chrono::Local;
-
 use crate::{
     app::App,
-    models::{
-        BillSummary, Focus, OrderStatus, PaymentMode, TableStatus, CLEANING_MINUTES,
-    },
+    models::{BillSummary, Focus, OrderStatus, PaymentMode, TableStatus, CLEANING_MINUTES},
     receipts::render_receipt,
 };
 
@@ -115,7 +111,28 @@ impl App {
         self.recent_bills.insert(0, summary);
         self.recent_bills.truncate(5);
         self.recent_bill_index = 0;
-        self.notify(format!("Bill #{} saved to database.", order_id));
+        let escpos_bytes = crate::printer::build_escpos_receipt(
+            self.order(),
+            &restaurant_name,
+            &restaurant_address,
+            &restaurant_contact,
+            &gst_number,
+            customer_mobile,
+            self.printer_config.cash_drawer_enabled,
+        );
+        let _ = crate::printer::send_bytes(
+            &self.printer_config,
+            Some(&self.printer_config.bill_printer),
+            &escpos_bytes,
+        );
+        self.queue_effect(crate::app::AppEffect::PrintReceipt {
+            printer: self.printer_config.bill_printer.clone(),
+            data: escpos_bytes,
+        });
+        self.queue_effect(crate::app::AppEffect::SaveFile {
+            path: std::path::PathBuf::from(format!("receipts/bill_{order_id}.txt")),
+            content: bill_text.clone(),
+        });
 
         self.order_mut().status = OrderStatus::Paid;
 
@@ -177,16 +194,7 @@ impl App {
         }
 
         if let Some((table_num, area)) = table_info {
-            if let Some(pt) = self
-                .physical_tables
-                .iter_mut()
-                .find(|t| t.area == area && t.number == table_num)
-            {
-                pt.status = TableStatus::Dirty;
-                pt.order_id = None;
-                pt.dirty_since = Some(Local::now());
-            }
-            self.persist_table(&area, table_num);
+            self.transition_table_status(&area, table_num, TableStatus::Dirty);
             self.notify(format!(
                 "Closed {label} via {mode_display}. Table {table_num} cleaning — auto-ready in {CLEANING_MINUTES} min."
             ));

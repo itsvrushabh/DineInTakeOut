@@ -625,6 +625,7 @@ dependencies = [
  "fuzzy-matcher",
  "qrcode",
  "ratatui",
+ "thiserror",
  "tokio",
  "turso",
 ]

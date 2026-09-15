@@ -1,13 +1,13 @@
-use std::{fs, path::Path};
 use crossterm::event::KeyCode;
 use ratatui::{backend::TestBackend, Terminal};
+use std::{fs, path::Path};
 
 use crate::{
     app::{max_takeout_number, App},
     db::Database,
     models::{
-        Area, CartLine, Focus, KotSummary, Offer, Order, OrderStatus, PaymentMode,
-        PhysicalTable, Service, TableStatus,
+        Area, CartLine, Focus, KotSummary, Offer, Order, OrderStatus, PaymentMode, PhysicalTable,
+        Service, TableStatus,
     },
     printer::{PrinterConfig, PrinterMode},
     ui::{bill::render_bill, floor_plan::render_tabs, table_info::render_table_info},
@@ -63,7 +63,10 @@ fn test_app_new_no_database_and_fallback_branches() {
     });
     app.bill_search_index = 0;
     app.reprint_selected_historical_bill();
-    assert!(app.notifications.iter().any(|(n, _)| n.contains("Could not load details")));
+    assert!(app
+        .notifications
+        .iter()
+        .any(|(n, _)| n.contains("Could not load details")));
 
     // KOT generation and reprint with no database
     app.open_takeout_order();
@@ -103,12 +106,14 @@ fn test_app_new_with_csv_config_and_rate_over_one() {
     fs::write(
         temp_dir.join("table.csv"),
         "Area,Tables,IsAC\nRooftop,4,true\n",
-    ).unwrap();
+    )
+    .unwrap();
 
     fs::write(
         temp_dir.join("menu.csv"),
         "Category,Name,Unit,Price,Available\nBreakfast,Special Dosa,Plate,95.0,true\n",
-    ).unwrap();
+    )
+    .unwrap();
 
     let app = App::new_with_paths(None, Some(&temp_dir));
     assert_eq!(app.restaurant_name, "MY SPECIAL HOTEL");
@@ -133,7 +138,11 @@ fn test_app_new_with_database_seed_and_crash_reconciliation() {
     {
         let db = Database::open(&temp_db).unwrap();
         // Seed areas
-        let areas = vec![Area { name: "Main Hall".into(), table_count: 5, is_ac: false }];
+        let areas = vec![Area {
+            name: "Main Hall".into(),
+            table_count: 5,
+            is_ac: false,
+        }];
         db.replace_areas(&areas).unwrap();
 
         // Seed an open order on Table 2
@@ -160,8 +169,10 @@ fn test_app_new_with_database_seed_and_crash_reconciliation() {
         db.upsert_table(&pt).unwrap();
 
         // Seed settings
-        db.set_setting("restaurant_name", "RECONCILED RESTAURANT").unwrap();
-        db.set_setting("restaurant_address", "Reconcile St").unwrap();
+        db.set_setting("restaurant_name", "RECONCILED RESTAURANT")
+            .unwrap();
+        db.set_setting("restaurant_address", "Reconcile St")
+            .unwrap();
         db.set_setting("restaurant_contact", "1234567890").unwrap();
         db.set_setting("gst_number", "GST123").unwrap();
         db.set_setting("ac_rate", "0.08").unwrap();
@@ -173,7 +184,11 @@ fn test_app_new_with_database_seed_and_crash_reconciliation() {
     assert_eq!(app.orders.len(), 1);
 
     // Verify reconciliation: table 2 should be Ordering and assigned order_id 10
-    let table2 = app.physical_tables.iter().find(|t| t.area == "Main Hall" && t.number == 2).unwrap();
+    let table2 = app
+        .physical_tables
+        .iter()
+        .find(|t| t.area == "Main Hall" && t.number == 2)
+        .unwrap();
     assert_eq!(table2.status, TableStatus::Ordering);
     assert_eq!(table2.order_id, Some(10));
 
@@ -214,13 +229,19 @@ fn test_cart_edge_cases_and_ensure_editable_order() {
     // Invalid cart index adjustment
     app.order_mut().cart_index = 999;
     app.adjust_selected_line_quantity(1);
-    assert!(app.notifications.iter().any(|(n, _)| n.contains("No item selected")));
+    assert!(app
+        .notifications
+        .iter()
+        .any(|(n, _)| n.contains("No item selected")));
 
     // Decrease below 1 guard
     app.order_mut().cart_index = 0;
     app.order_mut().cart[0].qty = 1;
     app.adjust_selected_line_quantity(-1);
-    assert!(app.notifications.iter().any(|(n, _)| n.contains("Cannot decrease below 1")));
+    assert!(app
+        .notifications
+        .iter()
+        .any(|(n, _)| n.contains("Cannot decrease below 1")));
 
     // Clear active cart
     app.clear_active_cart();
@@ -255,13 +276,19 @@ fn test_billing_and_kot_guards() {
     app.add_selected_to_cart();
     app.order_mut().cart[0].is_complimentary = true;
     app.complete_billing("", None);
-    assert!(app.notifications.iter().any(|(n, _)| n.contains("Total must be greater than zero")));
+    assert!(app
+        .notifications
+        .iter()
+        .any(|(n, _)| n.contains("Total must be greater than zero")));
 
     // Split payment underpayment guard
     app.order_mut().cart[0].is_complimentary = false;
     app.split_cash = "1.00".into();
     app.confirm_split_payment();
-    assert!(app.notifications.iter().any(|(n, _)| n.contains("Remaining balance")));
+    assert!(app
+        .notifications
+        .iter()
+        .any(|(n, _)| n.contains("Remaining balance")));
 
     // KDS bump status when empty and with fallback
     app.kds_kots.clear();
@@ -315,7 +342,10 @@ fn test_orders_and_tables_guards() {
     // Empty areas guard
     app.areas.clear();
     app.open_table_order();
-    assert!(app.notifications.iter().any(|(n, _)| n.contains("No dining areas configured")));
+    assert!(app
+        .notifications
+        .iter()
+        .any(|(n, _)| n.contains("No dining areas configured")));
 
     // Restore areas
     app.areas = Area::defaults();
@@ -323,12 +353,18 @@ fn test_orders_and_tables_guards() {
 
     // Close order guards
     app.close_order();
-    assert!(app.notifications.iter().any(|(n, _)| n.contains("No orders to close")));
+    assert!(app
+        .notifications
+        .iter()
+        .any(|(n, _)| n.contains("No orders to close")));
 
     app.open_takeout_order();
     app.order_mut().cart.push(CartLine::new("Chai", 20.0, 1));
     app.close_order();
-    assert!(app.notifications.iter().any(|(n, _)| n.contains("Cannot close order with items")));
+    assert!(app
+        .notifications
+        .iter()
+        .any(|(n, _)| n.contains("Cannot close order with items")));
 
     // Payment mode update guard
     app.update_paid_order_payment_mode(PaymentMode::Cash);
@@ -336,16 +372,25 @@ fn test_orders_and_tables_guards() {
     // Advance stage guards
     app.orders.clear();
     app.advance_stage();
-    assert!(app.notifications.iter().any(|(n, _)| n.contains("No active order")));
+    assert!(app
+        .notifications
+        .iter()
+        .any(|(n, _)| n.contains("No active order")));
 
     app.open_takeout_order();
     app.order_mut().status = OrderStatus::Paid;
     app.advance_stage();
-    assert!(app.notifications.iter().any(|(n, _)| n.contains("already at final stage")));
+    assert!(app
+        .notifications
+        .iter()
+        .any(|(n, _)| n.contains("already at final stage")));
 
     // Table move guards
     app.open_table_move();
-    assert!(app.notifications.iter().any(|(n, _)| n.contains("Selected table does not have an active order")));
+    assert!(app
+        .notifications
+        .iter()
+        .any(|(n, _)| n.contains("Selected table does not have an active order")));
 
     app.execute_table_move_or_merge();
 
@@ -353,13 +398,17 @@ fn test_orders_and_tables_guards() {
     app.selected_area_index = 0;
     app.selected_table_index = 0;
     app.open_table_order();
-    assert_eq!(app.order().is_ac, false);
+    assert!(!app.order().is_ac);
 
     // Find an AC area destination
-    let ac_dest_idx = app.table_move_targets().iter().position(|t| t.is_ac).unwrap();
+    let ac_dest_idx = app
+        .table_move_targets()
+        .iter()
+        .position(|t| t.is_ac)
+        .unwrap();
     app.table_move_target_index = ac_dest_idx;
     app.execute_table_move_or_merge();
-    assert_eq!(app.order().is_ac, true);
+    assert!(app.order().is_ac);
     assert!((app.order().ac_rate - app.ac_rate).abs() < 1e-6);
 }
 
@@ -501,7 +550,8 @@ fn test_events_all_focus_and_keys() {
     app.focus = Focus::Menu;
     app.handle_key(KeyCode::Char('K'));
     app.handle_key(KeyCode::Char('p'));
-    let temp_export_dir = std::env::temp_dir().join(format!("test_keys_export_{}", std::process::id()));
+    let temp_export_dir =
+        std::env::temp_dir().join(format!("test_keys_export_{}", std::process::id()));
     let _ = fs::create_dir_all(&temp_export_dir);
     app.data_file = temp_export_dir.join("menu.csv");
     app.handle_key(KeyCode::Char('e'));
@@ -551,22 +601,24 @@ fn test_ui_render_all_edge_cases() {
     let mut terminal = Terminal::new(backend).unwrap();
 
     // Render bill in various statuses
-    terminal.draw(|f| {
-        let area = f.area();
-        app.order_mut().status = OrderStatus::Ordering;
-        app.focus = Focus::Tables;
-        render_bill(f, &app, area);
+    terminal
+        .draw(|f| {
+            let area = f.area();
+            app.order_mut().status = OrderStatus::Ordering;
+            app.focus = Focus::Tables;
+            render_bill(f, &app, area);
 
-        app.order_mut().status = OrderStatus::Serving;
-        render_bill(f, &app, area);
+            app.order_mut().status = OrderStatus::Serving;
+            render_bill(f, &app, area);
 
-        app.order_mut().status = OrderStatus::BillRequested;
-        render_bill(f, &app, area);
+            app.order_mut().status = OrderStatus::BillRequested;
+            render_bill(f, &app, area);
 
-        app.order_mut().status = OrderStatus::Paid;
-        app.order_mut().payment_mode = None;
-        render_bill(f, &app, area);
-    }).unwrap();
+            app.order_mut().status = OrderStatus::Paid;
+            app.order_mut().payment_mode = None;
+            render_bill(f, &app, area);
+        })
+        .unwrap();
 
     // Render floor plan with serving & bill requested tables
     if app.physical_tables.len() > 2 {
@@ -574,36 +626,48 @@ fn test_ui_render_all_edge_cases() {
         app.physical_tables[1].status = TableStatus::BillRequested;
     }
     app.focus = Focus::Tables;
-    terminal.draw(|f| {
-        render_tabs(f, &app, f.area());
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            render_tabs(f, &app, f.area());
+        })
+        .unwrap();
 
     // Render table info with no areas
     let saved_areas = app.areas.clone();
     app.areas.clear();
-    terminal.draw(|f| {
-        render_table_info(f, &app, f.area());
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            render_table_info(f, &app, f.area());
+        })
+        .unwrap();
     app.areas = saved_areas;
 
     // Render table search scrolled
     app.focus = Focus::TableJump;
     app.table_input = "".into();
     app.table_search_index = 5;
-    terminal.draw(|f| {
-        render_table_info(f, &app, ratatui::layout::Rect::new(0, 0, 80, 5));
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            render_table_info(f, &app, ratatui::layout::Rect::new(0, 0, 80, 5));
+        })
+        .unwrap();
 
     // Render KDS empty
     app.kds_kots.clear();
-    terminal.draw(|f| {
-        crate::ui::kds::render_kds(f, &app);
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            crate::ui::kds::render_kds(f, &app);
+        })
+        .unwrap();
 
     // Render KDS with various ticket statuses and elapsed tiers
     let now = chrono::Local::now();
-    let t_warn = (now - chrono::Duration::minutes(15)).format("%H:%M:%S").to_string();
-    let t_urgent = (now - chrono::Duration::minutes(35)).format("%H:%M:%S").to_string();
+    let t_warn = (now - chrono::Duration::minutes(15))
+        .format("%H:%M:%S")
+        .to_string();
+    let t_urgent = (now - chrono::Duration::minutes(35))
+        .format("%H:%M:%S")
+        .to_string();
     app.kds_kots = vec![
         KotSummary {
             id: 1,
@@ -639,20 +703,27 @@ fn test_ui_render_all_edge_cases() {
             status: "SERVED".into(),
         },
     ];
-    terminal.draw(|f| {
-        crate::ui::kds::render_kds(f, &app);
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            crate::ui::kds::render_kds(f, &app);
+        })
+        .unwrap();
 
     // Render menu with many categories and unavailable item
-    app.categories = vec!["ALL", "C1", "C2", "C3", "C4", "C5", "C6"].into_iter().map(String::from).collect();
+    app.categories = vec!["ALL", "C1", "C2", "C3", "C4", "C5", "C6"]
+        .into_iter()
+        .map(String::from)
+        .collect();
     app.selected_category_index = 3;
     if !app.items.is_empty() {
         app.items[0].is_available = false;
     }
     app.focus = Focus::Menu;
-    terminal.draw(|f| {
-        crate::ui::menu::render_menu(f, &app, f.area());
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            crate::ui::menu::render_menu(f, &app, f.area());
+        })
+        .unwrap();
 }
 
 #[test]
@@ -739,8 +810,16 @@ fn test_advanced_events_and_table_operations() {
     app.open_takeout_order();
     app.add_selected_to_cart();
     app.offers = vec![
-        Offer { id: 1, name: "Offer 1".into(), discount_percent: 10.0 },
-        Offer { id: 2, name: "Offer 2".into(), discount_percent: 20.0 },
+        Offer {
+            id: 1,
+            name: "Offer 1".into(),
+            discount_percent: 10.0,
+        },
+        Offer {
+            id: 2,
+            name: "Offer 2".into(),
+            discount_percent: 20.0,
+        },
     ];
     app.focus = Focus::OfferSelect;
     app.handle_key(KeyCode::Down);
@@ -893,13 +972,21 @@ fn test_tick_cleaning_and_table_merging_with_matching_notes() {
 
     // Merge Table 2 into Table 1
     app.selected_table_index = 1;
-    let target_idx = app.table_move_targets().iter().position(|t| t.table_number == 1).unwrap();
+    let target_idx = app
+        .table_move_targets()
+        .iter()
+        .position(|t| t.table_number == 1)
+        .unwrap();
     app.table_move_target_index = target_idx;
     app.execute_table_move_or_merge();
 
     // Verify Chai with note "Ginger" was combined: 1 + 2 = 3
     let merged_order = app.order();
-    let chai_line = merged_order.cart.iter().find(|l| l.name == "Chai" && l.note.as_deref() == Some("Ginger")).unwrap();
+    let chai_line = merged_order
+        .cart
+        .iter()
+        .find(|l| l.name == "Chai" && l.note.as_deref() == Some("Ginger"))
+        .unwrap();
     assert_eq!(chai_line.qty, 3);
 }
 
@@ -913,24 +1000,36 @@ fn test_import_config_edge_cases() {
     // 1. menu.csv empty
     fs::write(temp_dir.join("menu.csv"), "").unwrap();
     app.import_config();
-    assert!(app.notifications.iter().any(|(n, _)| n.contains("menu.csv empty")));
+    assert!(app
+        .notifications
+        .iter()
+        .any(|(n, _)| n.contains("menu.csv empty")));
 
     // 2. menu.csv valid, table.csv empty
     fs::write(
         temp_dir.join("menu.csv"),
         "Category,Name,Unit,Price,Available\nBreakfast,Idli,Plate,40.0,true\n",
-    ).unwrap();
+    )
+    .unwrap();
     fs::write(temp_dir.join("table.csv"), "").unwrap();
     fs::write(temp_dir.join("areas.csv"), "").unwrap();
     app.import_config();
-    assert!(app.notifications.iter().any(|(n, _)| n.contains("table.csv / areas.csv empty")));
+    assert!(app
+        .notifications
+        .iter()
+        .any(|(n, _)| n.contains("table.csv / areas.csv empty")));
 
     // 3. config.csv invalid
     fs::write(
         temp_dir.join("table.csv"),
         "Area,Tables,IsAC\nGarden,5,false\n",
-    ).unwrap();
-    fs::write(temp_dir.join("offers.csv"), "Name,DiscountPercent\nOffer1,10.0\n").unwrap();
+    )
+    .unwrap();
+    fs::write(
+        temp_dir.join("offers.csv"),
+        "Name,DiscountPercent\nOffer1,10.0\n",
+    )
+    .unwrap();
     fs::write(temp_dir.join("config.csv"), "corrupt_data_without_comma\n").unwrap();
     app.import_config();
 
@@ -945,4 +1044,160 @@ fn test_import_config_edge_cases() {
     assert_eq!(app.offers.len(), 1);
 
     let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_refactored_table_invariants_modals_and_effects() {
+    let mut app = App::new_with_paths(None, None);
+
+    // 1. Table status invariant and lookup helpers
+    let area_name = app.areas[0].name.clone();
+    assert!(app.find_physical_table(&area_name, 1).is_some());
+    assert!(app.find_physical_table("NonExistent", 99).is_none());
+
+    if let Some(pt_mut) = app.find_physical_table_mut(&area_name, 1) {
+        pt_mut.order_id = Some(42);
+    }
+    assert_eq!(
+        app.find_physical_table(&area_name, 1).unwrap().order_id,
+        Some(42)
+    );
+
+    // Transition to Dirty: sets dirty_since and clears order_id
+    app.transition_table_status(&area_name, 1, TableStatus::Dirty);
+    let dirty_pt = app.find_physical_table(&area_name, 1).unwrap();
+    assert_eq!(dirty_pt.status, TableStatus::Dirty);
+    assert!(dirty_pt.dirty_since.is_some());
+    assert!(dirty_pt.order_id.is_none());
+
+    // Transition to Ready: clears dirty_since and order_id
+    app.transition_table_status(&area_name, 1, TableStatus::Ready);
+    let ready_pt = app.find_physical_table(&area_name, 1).unwrap();
+    assert_eq!(ready_pt.status, TableStatus::Ready);
+    assert!(ready_pt.dirty_since.is_none());
+
+    // 2. Modal state machine and active_modal mapping
+    assert_eq!(app.active_modal(), crate::app::ModalState::None);
+
+    app.focus = Focus::MobileEntry;
+    app.mobile_buffer = "9876543210".into();
+    assert_eq!(
+        app.active_modal(),
+        crate::app::ModalState::MobileEntry {
+            buffer: "9876543210".into()
+        }
+    );
+
+    app.focus = Focus::PaymentMode;
+    app.payment_mode_index = 2;
+    app.close_on_payment = true;
+    assert_eq!(
+        app.active_modal(),
+        crate::app::ModalState::PaymentMode {
+            index: 2,
+            close_on_payment: true
+        }
+    );
+
+    app.focus = Focus::OfferSelect;
+    app.offer_index = 1;
+    assert_eq!(
+        app.active_modal(),
+        crate::app::ModalState::OfferSelect { index: 1 }
+    );
+
+    app.focus = Focus::TableJump;
+    app.table_input = "T2".into();
+    app.table_search_index = 1;
+    assert_eq!(
+        app.active_modal(),
+        crate::app::ModalState::TableJump {
+            query: "T2".into(),
+            index: 1
+        }
+    );
+
+    app.focus = Focus::TableMove;
+    app.table_move_target_index = 3;
+    assert_eq!(
+        app.active_modal(),
+        crate::app::ModalState::TableMove { target_index: 3 }
+    );
+
+    app.focus = Focus::ItemNote;
+    app.item_note_buffer = "No onion".into();
+    assert_eq!(
+        app.active_modal(),
+        crate::app::ModalState::ItemNote {
+            buffer: "No onion".into()
+        }
+    );
+
+    app.focus = Focus::BillSearch;
+    app.bill_search_query = "101".into();
+    app.bill_search_index = 0;
+    assert_eq!(
+        app.active_modal(),
+        crate::app::ModalState::BillSearch {
+            query: "101".into(),
+            index: 0
+        }
+    );
+
+    app.focus = Focus::DailyReport;
+    assert_eq!(app.active_modal(), crate::app::ModalState::DailyReport);
+
+    app.focus = Focus::SplitPayment;
+    app.split_cash = "100".into();
+    app.split_upi = "200".into();
+    app.split_card = "50".into();
+    app.split_field = 1;
+    assert_eq!(
+        app.active_modal(),
+        crate::app::ModalState::SplitPayment {
+            cash: "100".into(),
+            upi: "200".into(),
+            card: "50".into(),
+            field: 1
+        }
+    );
+
+    app.focus = Focus::KitchenDisplay;
+    app.kds_index = 2;
+    assert_eq!(
+        app.active_modal(),
+        crate::app::ModalState::KitchenDisplay { index: 2 }
+    );
+
+    app.focus = Focus::Analytics;
+    assert_eq!(app.active_modal(), crate::app::ModalState::SalesAnalytics);
+
+    app.show_help = true;
+    assert_eq!(app.active_modal(), crate::app::ModalState::Help);
+
+    // Close active modal
+    app.focus_return = Focus::Cart;
+    app.close_active_modal();
+    assert_eq!(app.focus, Focus::Cart);
+    assert!(!app.show_help);
+    assert!(app.mobile_buffer.is_empty());
+    assert!(app.item_note_buffer.is_empty());
+    assert!(app.table_input.is_empty());
+    assert!(app.split_cash.is_empty());
+
+    // 3. Command / Effect Queue Pattern
+    assert!(app.drain_effects().is_empty());
+    app.queue_effect(crate::app::AppEffect::PrintReceipt {
+        printer: "BillPrinter1".into(),
+        data: vec![0x1B, 0x40],
+    });
+    app.queue_effect(crate::app::AppEffect::SaveFile {
+        path: std::path::PathBuf::from("receipts/test.txt"),
+        content: "test receipt".into(),
+    });
+    app.queue_effect(crate::app::AppEffect::TriggerBackup);
+
+    let drained = app.drain_effects();
+    assert_eq!(drained.len(), 3);
+    assert!(app.drain_effects().is_empty());
 }
