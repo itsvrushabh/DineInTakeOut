@@ -1955,5 +1955,216 @@ fn app_cancellation_and_table_merge_workflows() {
     let _ = fs::remove_file(database_path);
 }
 
+#[test]
+fn pos_ultimate_edge_cases_and_100_percent_coverage() {
+    // 1. App::default()
+    let default_app = App::default();
+    assert!(!default_app.items.is_empty());
 
+    let (mut app, database_path) = fixture();
 
+    // 2. Unmatched switch_to_box
+    app.switch_to_box(0);
+    app.switch_to_box(8);
+    app.switch_to_box(99);
+
+    // 3. Focus::Search key handling
+    app.focus = Focus::Search;
+    app.handle_key(KeyCode::Char('s'));
+    app.handle_key(KeyCode::Char('a'));
+    app.handle_key(KeyCode::Backspace);
+    app.open_takeout_order();
+    app.focus = Focus::Search;
+    app.handle_key(KeyCode::Enter);
+    assert!(!app.order().cart.is_empty());
+    app.handle_key(KeyCode::Tab);
+    assert_eq!(app.focus, Focus::Menu);
+    app.focus = Focus::Search;
+    app.handle_key(KeyCode::BackTab);
+    assert_eq!(app.focus, Focus::Tables);
+    app.focus = Focus::Search;
+    app.handle_key(KeyCode::Down);
+    assert_eq!(app.focus, Focus::Menu);
+    app.focus = Focus::Search;
+    app.handle_key(KeyCode::Esc);
+    assert_eq!(app.focus, Focus::Menu);
+
+    // 4. Focus::Menu key handling
+    app.focus = Focus::Menu;
+    app.handle_key(KeyCode::Char('k'));
+    app.handle_key(KeyCode::Char('j'));
+    app.handle_key(KeyCode::Char('/'));
+    assert_eq!(app.focus, Focus::Search);
+    app.focus = Focus::Menu;
+    app.handle_key(KeyCode::Char('c')); // clear cart
+    app.handle_key(KeyCode::Char('e')); // export config
+    app.handle_key(KeyCode::Char('i')); // import config
+    app.handle_key(KeyCode::Char('K')); // generate KOT on empty cart
+    app.add_selected_to_cart();
+    app.handle_key(KeyCode::Char('K')); // generate KOT with items
+    app.handle_key(KeyCode::Char('g')); // table jump
+    assert_eq!(app.focus, Focus::TableJump);
+    app.handle_key(KeyCode::Esc);
+    app.focus = Focus::Menu;
+    app.handle_key(KeyCode::Char('p')); // begin billing
+    assert_eq!(app.focus, Focus::MobileEntry);
+    app.handle_key(KeyCode::Esc);
+
+    // 5. Focus::Cart key handling
+    app.focus = Focus::Cart;
+    app.handle_key(KeyCode::Char('w'));
+    app.handle_key(KeyCode::Char('s'));
+    app.handle_key(KeyCode::Char('k'));
+    app.handle_key(KeyCode::Char('K'));
+    app.handle_key(KeyCode::Char('c'));
+    app.handle_key(KeyCode::Char('d'));
+    app.handle_key(KeyCode::Char('n'));
+    assert_eq!(app.focus, Focus::ItemNote);
+    app.handle_key(KeyCode::Esc);
+    app.focus = Focus::Cart;
+    app.handle_key(KeyCode::Char('='));
+    app.handle_key(KeyCode::Char('+'));
+    app.handle_key(KeyCode::Char('-'));
+    app.handle_key(KeyCode::Char('x'));
+    app.handle_key(KeyCode::Delete);
+    app.handle_key(KeyCode::Char('C'));
+    app.handle_key(KeyCode::Char('g'));
+    assert_eq!(app.focus, Focus::TableJump);
+    app.handle_key(KeyCode::Esc);
+    app.focus = Focus::Cart;
+    app.add_selected_to_cart();
+    app.handle_key(KeyCode::Char('p'));
+    assert_eq!(app.focus, Focus::MobileEntry);
+    app.handle_key(KeyCode::Esc);
+    app.focus = Focus::Cart;
+    app.handle_key(KeyCode::BackTab);
+    assert_eq!(app.focus, Focus::Menu);
+
+    // 6. Focus::Tables key handling
+    app.focus = Focus::Tables;
+    app.handle_key(KeyCode::Char('b')); // begin billing
+    assert_eq!(app.focus, Focus::MobileEntry);
+    app.handle_key(KeyCode::Esc);
+    app.selected_table_index = 1;
+    app.open_table_order();
+    let ord_id = app.order().id;
+    app.open_takeout_order();
+    app.focus = Focus::Tables;
+    app.selected_table_index = 1;
+    app.handle_key(KeyCode::Enter); // switch to existing table order
+    assert_eq!(app.order().id, ord_id);
+    app.physical_tables[1].status = TableStatus::Dirty;
+    app.handle_key(KeyCode::Enter); // dirty table enter cleans table
+    assert_eq!(app.physical_tables[1].status, TableStatus::Ready);
+
+    // 7. Focus::RecentBills key handling
+    app.focus = Focus::RecentBills;
+    app.recent_tab = RecentTab::Kots;
+    app.handle_key(KeyCode::Enter);
+    app.handle_key(KeyCode::Char('r'));
+    app.handle_key(KeyCode::BackTab);
+    assert_eq!(app.recent_tab, RecentTab::Bills);
+    app.handle_key(KeyCode::Enter);
+    app.handle_key(KeyCode::Char('r'));
+
+    // 8. Focus::MobileEntry key handling
+    app.focus = Focus::MobileEntry;
+    app.mobile_buffer = "123".into();
+    app.handle_key(KeyCode::Enter); // invalid length
+    app.mobile_buffer = "9876543210".into();
+    app.offers.clear();
+    app.handle_key(KeyCode::Enter); // completes billing without offers
+
+    // 9. Focus::PaymentMode key handling
+    app.focus = Focus::PaymentMode;
+    app.handle_key(KeyCode::Enter);
+    app.focus = Focus::PaymentMode;
+    app.handle_key(KeyCode::Char('s')); // split
+    assert_eq!(app.focus, Focus::SplitPayment);
+    app.handle_key(KeyCode::Esc);
+    app.focus = Focus::PaymentMode;
+    app.handle_key(KeyCode::Char('5')); // PersonCredit
+    app.focus = Focus::PaymentMode;
+    app.handle_key(KeyCode::Char('6')); // HaveItOnHotel
+
+    // 10. Focus::OfferSelect key handling
+    app.focus = Focus::OfferSelect;
+    app.offers.push(Offer { id: 1, name: "Special 10".into(), discount_percent: 10.0 });
+    app.handle_key(KeyCode::Char('1'));
+    app.focus = Focus::OfferSelect;
+    app.handle_key(KeyCode::Enter);
+    app.focus = Focus::OfferSelect;
+    app.handle_key(KeyCode::Esc);
+
+    // 11. Focus::TableJump empty / invalid query
+    app.focus = Focus::TableJump;
+    app.table_input = "".into();
+    app.handle_key(KeyCode::Enter);
+    assert_eq!(app.focus, Focus::Tables);
+    app.focus = Focus::TableJump;
+    app.table_input = "NONEXISTENT_XYZ".into();
+    app.handle_key(KeyCode::Enter);
+
+    // 12. Focus::DailyReport
+    app.focus = Focus::DailyReport;
+    app.handle_key(KeyCode::Enter);
+    app.focus = Focus::DailyReport;
+    app.handle_key(KeyCode::Char('q'));
+
+    // 13. Focus::UpiQr
+    app.focus = Focus::UpiQr;
+    app.handle_key(KeyCode::Char('Q'));
+
+    // 14. Focus::ItemNote
+    app.focus = Focus::ItemNote;
+    app.item_note_buffer = "Test Note".into();
+    app.handle_key(KeyCode::Enter);
+
+    // 15. Focus::KitchenDisplay
+    app.open_kds();
+    app.handle_key(KeyCode::Char('q'));
+    app.open_kds();
+    app.handle_key(KeyCode::Char('k'));
+    app.open_kds();
+    app.handle_key(KeyCode::Char('K'));
+
+    // 16. Focus::SplitPayment
+    app.focus = Focus::SplitPayment;
+    app.handle_key(KeyCode::Char('A')); // autofill
+    app.handle_key(KeyCode::Enter);     // confirm
+
+    // 17. Focus::Analytics
+    app.open_sales_analytics();
+    app.handle_key(KeyCode::Char('q'));
+    app.open_sales_analytics();
+    app.handle_key(KeyCode::Char('a'));
+    app.open_sales_analytics();
+    app.handle_key(KeyCode::Char('A'));
+    app.open_sales_analytics();
+    app.handle_key(KeyCode::Enter);
+
+    // 18. rebuild_physical_tables
+    app.rebuild_physical_tables();
+
+    // 19. UI Search view render
+    let backend = ratatui::backend::TestBackend::new(80, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|f| {
+        let area = f.area();
+        app.search = "tea".into();
+        app.focus = Focus::Search;
+        dinein_takeout_billing::ui::search::render_search(f, &app, area);
+        let compact = ratatui::layout::Rect::new(0, 0, 80, 1);
+        dinein_takeout_billing::ui::search::render_search(f, &app, compact);
+    }).unwrap();
+
+    // 20. Config import/export with empty directory
+    let temp_dir = std::env::temp_dir().join(format!("test_import_export_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    app.data_file = temp_dir.join("menu.csv");
+    app.export_config();
+    app.import_config();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    let _ = fs::remove_file(database_path);
+}
